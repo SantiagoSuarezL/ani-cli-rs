@@ -74,6 +74,8 @@ impl AniGuiApp {
         let tx = self.state.message_sender();
         let anikoto_client = self.state.anikoto_client.clone();
         let anikoto_cz_client = self.state.anikoto_cz_client.clone();
+        let jkanime_client = self.state.jkanime_client.clone();
+        let tioanime_client = self.state.tioanime_client.clone();
         let provider = self.state.provider;
         let translation = self.state.translation;
 
@@ -92,6 +94,22 @@ impl AniGuiApp {
                         client.search(&query, translation).await
                     } else {
                         Err(AniError::Provider("Anikoto.cz client not available".into()))
+                    }
+                }
+
+                CatalogProvider::JkAnime => {
+                    if let Some(client) = jkanime_client {
+                        client.search(&query, translation).await
+                    } else {
+                        Err(AniError::Provider("JKAnime client not available".into()))
+                    }
+                }
+
+                CatalogProvider::TioAnime => {
+                    if let Some(client) = tioanime_client {
+                        client.search(&query, translation).await
+                    } else {
+                        Err(AniError::Provider("TioAnime client not available".into()))
                     }
                 }
             };
@@ -112,6 +130,8 @@ impl AniGuiApp {
         let tx = self.state.message_sender();
         let anikoto_client = self.state.anikoto_client.clone();
         let anikoto_cz_client = self.state.anikoto_cz_client.clone();
+        let jkanime_client = self.state.jkanime_client.clone();
+        let tioanime_client = self.state.tioanime_client.clone();
         let provider = self.state.provider;
         let translation = self.state.translation;
 
@@ -130,6 +150,22 @@ impl AniGuiApp {
                         client.episodes(&show_id, translation).await
                     } else {
                         Err(AniError::Provider("Anikoto.cz client not available".into()))
+                    }
+                }
+
+                CatalogProvider::JkAnime => {
+                    if let Some(client) = jkanime_client {
+                        client.episodes(&show_id, translation).await
+                    } else {
+                        Err(AniError::Provider("JKAnime client not available".into()))
+                    }
+                }
+
+                CatalogProvider::TioAnime => {
+                    if let Some(client) = tioanime_client {
+                        client.episodes(&show_id, translation).await
+                    } else {
+                        Err(AniError::Provider("TioAnime client not available".into()))
                     }
                 }
             };
@@ -150,6 +186,8 @@ impl AniGuiApp {
         let tx = self.state.message_sender();
         let anikoto_client = self.state.anikoto_client.clone();
         let anikoto_cz_client = self.state.anikoto_cz_client.clone();
+        let jkanime_client = self.state.jkanime_client.clone();
+        let tioanime_client = self.state.tioanime_client.clone();
         let provider = self.state.provider;
         let translation = self.state.translation;
 
@@ -168,6 +206,22 @@ impl AniGuiApp {
                         client.streams(&show_id, &episode, translation).await
                     } else {
                         Err(AniError::Provider("Anikoto.cz client not available".into()))
+                    }
+                }
+
+                CatalogProvider::JkAnime => {
+                    if let Some(client) = jkanime_client {
+                        client.streams(&show_id, &episode, translation).await
+                    } else {
+                        Err(AniError::Provider("JKAnime client not available".into()))
+                    }
+                }
+
+                CatalogProvider::TioAnime => {
+                    if let Some(client) = tioanime_client {
+                        client.streams(&show_id, &episode, translation).await
+                    } else {
+                        Err(AniError::Provider("TioAnime client not available".into()))
                     }
                 }
             };
@@ -364,6 +418,8 @@ impl AniGuiApp {
                     .selected_text(match self.state.provider {
                         CatalogProvider::Anikoto => "Anikoto",
                         CatalogProvider::Anikoto2 => "Anikoto.cz",
+                        CatalogProvider::JkAnime => "JKAnime",
+                        CatalogProvider::TioAnime => "TioAnime",
                     })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
@@ -376,6 +432,18 @@ impl AniGuiApp {
                             &mut self.state.provider,
                             CatalogProvider::Anikoto2,
                             "Anikoto.cz",
+                        );
+
+                        ui.selectable_value(
+                            &mut self.state.provider,
+                            CatalogProvider::JkAnime,
+                            "JKAnime",
+                        );
+
+                        ui.selectable_value(
+                            &mut self.state.provider,
+                            CatalogProvider::TioAnime,
+                            "TioAnime",
                         );
                     });
             });
@@ -519,6 +587,8 @@ impl AniGuiApp {
                     let provider = match result.provider {
                         CatalogProvider::Anikoto => "Anikoto",
                         CatalogProvider::Anikoto2 => "Anikoto.cz",
+                        CatalogProvider::JkAnime => "JKAnime",
+                        CatalogProvider::TioAnime => "TioAnime",
                     };
 
                     let row_text = format!(
@@ -600,6 +670,8 @@ impl AniGuiApp {
                         match show.provider {
                             CatalogProvider::Anikoto => "Anikoto",
                             CatalogProvider::Anikoto2 => "Anikoto.cz",
+                            CatalogProvider::JkAnime => "JKAnime",
+                            CatalogProvider::TioAnime => "TioAnime",
                         }
                     ))
                     .small()
@@ -828,6 +900,8 @@ impl AniGuiApp {
                 let provider = match self.state.provider {
                     CatalogProvider::Anikoto => "Anikoto",
                     CatalogProvider::Anikoto2 => "Anikoto.cz",
+                    CatalogProvider::JkAnime => "JKAnime",
+                    CatalogProvider::TioAnime => "TioAnime",
                 };
 
                 ui.label(

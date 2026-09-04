@@ -7,10 +7,11 @@ use crate::{AniError, Result};
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CatalogProvider {
-    Anikoto,
     #[default]
+    Anikoto,
     Anikoto2,
     JkAnime,
+    TioAnime,
 }
 
 impl fmt::Display for CatalogProvider {
@@ -19,7 +20,19 @@ impl fmt::Display for CatalogProvider {
             Self::Anikoto => "anikoto",
             Self::Anikoto2 => "anikoto2",
             Self::JkAnime => "jkanime",
+            Self::TioAnime => "tioanime",
         })
+    }
+}
+
+impl CatalogProvider {
+    /// Providers whose catalog is live-verified Spanish content.
+    /// JKAnime and TioAnime qualify (single "sub español" catalogs with
+    /// hardcoded subtitles, verified live 2026-09-04). Flip a provider to
+    /// `true` only with fresh live evidence, never from historical
+    /// repositories.
+    pub fn spanish_capable(self) -> bool {
+        matches!(self, Self::JkAnime | Self::TioAnime)
     }
 }
 
@@ -31,8 +44,9 @@ impl FromStr for CatalogProvider {
             "anikoto" | "anikoto1" | "anikoto-api" => Ok(Self::Anikoto),
             "anikoto2" | "anikoto-cz" | "anikoto.cz" => Ok(Self::Anikoto2),
             "jkanime" | "jk" | "jk-anime" => Ok(Self::JkAnime),
+            "tioanime" | "tio" => Ok(Self::TioAnime),
             _ => Err(AniError::Input(format!(
-                "provider must be anikoto, anikoto2 or jkanime, got {value}"
+                "provider must be anikoto, anikoto2, jkanime or tioanime, got {value}"
             ))),
         }
     }
@@ -100,6 +114,41 @@ impl FromStr for LanguagePreference {
     }
 }
 
+/// Chooses the catalog for a search: an explicit `--provider` always wins;
+/// without one, `--language es` auto-routes to the only verified Spanish
+/// source instead of the default catalog.
+pub fn effective_search_provider(
+    selected: Option<CatalogProvider>,
+    language: LanguagePreference,
+) -> CatalogProvider {
+    match (selected, language) {
+        (Some(provider), _) => provider,
+        (None, LanguagePreference::Spanish) => CatalogProvider::JkAnime,
+        (None, LanguagePreference::Default) => CatalogProvider::default(),
+    }
+}
+
+/// Whether a failed/empty Spanish search should offer the explicit English
+/// fallback (TECH §7) instead of propagating the error: provider-side
+/// failures (network, malformed data, rate limits, nothing found) qualify;
+/// user input errors and local bugs never do.
+pub fn is_fallback_trigger<T>(result: &Result<T>) -> bool {
+    match result {
+        Ok(_) => true, // callers only pass through here when results are empty
+        Err(
+            AniError::Network(_)
+            | AniError::Provider(_)
+            | AniError::Catalog { .. }
+            | AniError::ProviderRateLimited { .. }
+            | AniError::Unavailable(_)
+            | AniError::UnavailableNoResults
+            | AniError::UnavailableNoEpisodes
+            | AniError::UnavailableNoStreams,
+        ) => true,
+        Err(_) => false,
+    }
+}
+
 /// Minimal experimental gate: only providers with live-verified Spanish
 /// content satisfy `--language es`. JKAnime qualifies: its live episode pages
 /// expose a single "Japones Sub. Español" catalog with hardcoded subtitles
@@ -110,6 +159,7 @@ pub fn require_language(provider: CatalogProvider, language: LanguagePreference)
     match (provider, language) {
         (_, LanguagePreference::Default) => Ok(()),
         (CatalogProvider::JkAnime, LanguagePreference::Spanish) => Ok(()),
+        (CatalogProvider::TioAnime, LanguagePreference::Spanish) => Ok(()),
         (provider, LanguagePreference::Spanish) => Err(AniError::Unavailable(format!(
             "Spanish audio/subtitles are not available from the {provider} catalog in this experimental phase"
         ))),
@@ -339,11 +389,56 @@ mod tests {
             CatalogProvider::Anikoto,
             CatalogProvider::Anikoto2,
             CatalogProvider::JkAnime,
+            CatalogProvider::TioAnime,
         ] {
             require_language(provider, LanguagePreference::Default).unwrap();
         }
         require_language(CatalogProvider::JkAnime, LanguagePreference::Spanish).unwrap();
+        require_language(CatalogProvider::TioAnime, LanguagePreference::Spanish).unwrap();
         assert!(require_language(CatalogProvider::Anikoto, LanguagePreference::Spanish).is_err());
         assert!(require_language(CatalogProvider::Anikoto2, LanguagePreference::Spanish).is_err());
+    }
+
+    #[test]
+    fn search_provider_auto_routes_spanish_to_jkanime() {
+        use CatalogProvider as P;
+        assert_eq!(
+            effective_search_provider(None, LanguagePreference::Default),
+            CatalogProvider::default()
+        );
+        assert_eq!(
+            effective_search_provider(None, LanguagePreference::Spanish),
+            P::JkAnime
+        );
+        for provider in [P::Anikoto, P::Anikoto2, P::JkAnime, P::TioAnime] {
+            assert!(provider.spanish_capable() == matches!(provider, P::JkAnime | P::TioAnime));
+            for language in [
+                LanguagePreference::Default,
+                LanguagePreference::Spanish,
+            ] {
+                assert_eq!(
+                    effective_search_provider(Some(provider), language),
+                    provider
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fallback_triggers_on_provider_failures_only() {
+        let empty: Result<Vec<SearchResult>> = Ok(Vec::new());
+        assert!(is_fallback_trigger(&empty));
+        assert!(is_fallback_trigger::<Vec<SearchResult>>(&Err(
+            AniError::UnavailableNoResults
+        )));
+        assert!(is_fallback_trigger::<Vec<SearchResult>>(&Err(AniError::Network(
+            "down".into()
+        ))));
+        assert!(!is_fallback_trigger::<Vec<SearchResult>>(&Err(
+            AniError::InputEmptyQuery
+        )));
+        assert!(!is_fallback_trigger::<Vec<SearchResult>>(&Err(
+            AniError::InputSelectionOutOfRange
+        )));
     }
 }

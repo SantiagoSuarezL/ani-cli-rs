@@ -3,8 +3,9 @@ use std::{io::IsTerminal, path::PathBuf, str::FromStr};
 use ani_lib::{
     AniError, AnikotoClient, AnikotoCzClient, CatalogProvider, DownloadOptions, HistoryEntry,
     HistoryStore, I18n, JkAnimeClient, LanguagePreference, Player, PlayerKind, PlayerOptions,
-    Result, SearchOptions, SearchResult, StreamLink, TranslationType, choose_quality,
-    download_stream, expand_episode_selection, provider_from_show_id, require_language,
+    Result, SearchOptions, SearchResult, StreamLink, TioAnimeClient, TranslationType,
+    choose_quality, download_stream, effective_search_provider, expand_episode_selection,
+    is_fallback_trigger, provider_from_show_id, require_language,
 };
 #[cfg(debug_assertions)]
 use ani_lib::{RequestHeaders, SubtitleTrack};
@@ -17,7 +18,7 @@ mod updater;
 
 const LONG_ABOUT: &str = "A cross-platform Rust port of ani-cli for browsing, resolving, playing, and downloading anime from Anikoto providers.\n\nThe interactive workflow searches the selected subbed or dubbed catalog, lists available episodes, resolves current provider links, selects the requested quality, and opens an external player. Anikoto API/MegaPlay is the default; select the independent Anikoto.cz catalog with --provider anikoto2 or ANI_CLI_RS_PROVIDER=anikoto2. JKAnime is available experimentally with --provider jkanime. Watch history uses the Bash ani-cli tab-separated format, so an existing history directory can be reused.\n\nThe scraper and KotoCDN compatibility relay are implemented entirely in Rust; Python, curl, sed, OpenSSL, Botan, and fzf are not required. Playback uses IINA on macOS, an Android media player from Termux, and mpv on other desktops by default, with optional VLC and Syncplay integrations. Downloads prefer aria2c for parallel transfers when available, with yt-dlp, FFmpeg, and the built-in resumable downloader as fallbacks.";
 
-const AFTER_HELP: &str = "KEYBOARD NAVIGATION:\n  Arrow keys / Tab       Navigate menus\n  j / k                  Move down / up in action menus\n  h / l                  Change pages in action menus\n  Space / Enter          Select or toggle an item\n  Type                    Filter fuzzy anime/episode menus\n  Escape                 Go back immediately from a fuzzy menu\n  q / Escape             Leave an ordinary action menu\n\nEXAMPLES:\n  ani-cli-rs frieren\n  ani-cli-rs --provider anikoto2 \"black torch\"\n  ani-cli-rs --allow-adult \"search query\"\n  ani-cli-rs --dub -q 720p \"cowboy bebop\"\n  ani-cli-rs -S 1 -e 2-4 \"one piece\"\n  ani-cli-rs --continue\n  ani-cli-rs --download -e 1 \"anime title\"\n  ani-cli-rs search --allow-adult --json \"search query\"\n  ani-cli-rs links --json SHOW_ID 1 --quality 1080p\n\nTERMUX:\n  Install an Android video player; do not use the terminal VLC package.\n  --vlc requests Android VLC when explicit intents work. A compatibility fallback\n  uses Android's media handler instead. Keep Termux open for relayed HLS playback.\n\nENVIRONMENT:\n  ANI_CLI_MODE, ANI_CLI_PLAYER, ANI_CLI_DOWNLOAD_DIR, ANI_CLI_QUALITY,\n  ANI_CLI_HIST_DIR, ANI_CLI_ALLOW_ADULT, ANI_CLI_MULTI_SELECTION,\n  ANI_CLI_NO_DETACH, ANI_CLI_EXIT_AFTER_PLAY, ANI_CLI_RS_PROVIDER\n\nDEBUG LOGGING:\n  RUST_LOG=ani_cli_rs=debug,ani_cli=debug    verbose launch diagnostics\n  RUST_LOG=ani_cli_rs=trace,ani_cli=trace    full stream resolution + relay tracing\n  RUST_LOG=warn                              only warnings and errors (default off)\n\nOfficial prebuilt releases are provided for Windows and Linux. Tested macOS and Termux builds are compiled from source.";
+const AFTER_HELP: &str = "KEYBOARD NAVIGATION:\n  Arrow keys / Tab       Navigate menus\n  j / k                  Move down / up in action menus\n  h / l                  Change pages in action menus\n  Space / Enter          Select or toggle an item\n  Type                    Filter fuzzy anime/episode menus\n  Escape                 Go back immediately from a fuzzy menu\n  q / Escape             Leave an ordinary action menu\n\nEXAMPLES:\n  ani-cli-rs frieren\n  ani-cli-rs --provider anikoto2 \"black torch\"\n  ani-cli-rs --language es \"black torch\"\n  ani-cli-rs --allow-adult \"search query\"\n  ani-cli-rs --dub -q 720p \"cowboy bebop\"\n  ani-cli-rs -S 1 -e 2-4 \"one piece\"\n  ani-cli-rs --continue\n  ani-cli-rs --download -e 1 \"anime title\"\n  ani-cli-rs search --allow-adult --json \"search query\"\n  ani-cli-rs links --json SHOW_ID 1 --quality 1080p\n\nTERMUX:\n  Install an Android video player; do not use the terminal VLC package.\n  --vlc requests Android VLC when explicit intents work. A compatibility fallback\n  uses Android's media handler instead. Keep Termux open for relayed HLS playback.\n\nENVIRONMENT:\n  ANI_CLI_MODE, ANI_CLI_PLAYER, ANI_CLI_DOWNLOAD_DIR, ANI_CLI_QUALITY,\n  ANI_CLI_HIST_DIR, ANI_CLI_ALLOW_ADULT, ANI_CLI_MULTI_SELECTION,\n  ANI_CLI_NO_DETACH, ANI_CLI_EXIT_AFTER_PLAY, ANI_CLI_RS_PROVIDER\n\nDEBUG LOGGING:\n  RUST_LOG=ani_cli_rs=debug,ani_cli=debug    verbose launch diagnostics\n  RUST_LOG=ani_cli_rs=trace,ani_cli=trace    full stream resolution + relay tracing\n  RUST_LOG=warn                              only warnings and errors (default off)\n\nOfficial prebuilt releases are provided for Windows and Linux. Tested macOS and Termux builds are compiled from source.";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -30,7 +31,7 @@ const AFTER_HELP: &str = "KEYBOARD NAVIGATION:\n  Arrow keys / Tab       Navigat
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-    /// Catalog provider: anikoto2 (default), anikoto, or jkanime (experimental JKAnime).
+    /// Catalog provider: anikoto2 (default), anikoto, jkanime or tioanime (experimental Spanish catalogs).
     #[arg(short = 'p', long, global = true, env = "ANI_CLI_RS_PROVIDER")]
     provider: Option<CatalogProvider>,
     /// Request Spanish-language content (experimental: only --language es with --provider jkanime for now).
@@ -229,9 +230,11 @@ async fn run(cli: Cli) -> Result<()> {
         return display_next_episode_schedule(&query).await;
     }
 
-    let clients = ProviderClients::new(cli.demo_mode(), cli.language.unwrap_or_default())?;
+    let demo_mode = cli.demo_mode();
+    let mut language = cli.language.unwrap_or_default();
+    let mut clients = ProviderClients::new(demo_mode, language)?;
     if let Some(command) = cli.command {
-        return run_command(&clients, cli.provider, command).await;
+        return run_command(demo_mode, &clients, cli.provider, command).await;
     }
     let history = HistoryStore::platform_default()?;
     if cli.delete {
@@ -287,16 +290,43 @@ async fn run(cli: Cli) -> Result<()> {
                         .interact_text()
                         .map_err(dialog_error)?
                 };
-                let results = clients
+                let provider = effective_search_provider(cli.provider, language);
+                let attempt = clients
                     .search_with_options(
-                        cli.provider.unwrap_or_default(),
+                        provider,
                         &query,
                         mode,
                         SearchOptions {
                             allow_adult: cli.allow_adult,
                         },
                     )
-                    .await?;
+                    .await;
+                let failed_spanish = language == LanguagePreference::Spanish
+                    && provider.spanish_capable()
+                    && is_fallback_trigger(&attempt);
+                let results = match attempt {
+                    Ok(results) if !results.is_empty() => results,
+                    _ if failed_spanish => {
+                        if offer_english_fallback(&query, false).await? {
+                            language = LanguagePreference::Default;
+                            clients = ProviderClients::new(demo_mode, language)?;
+                            clients
+                                .search_with_options(
+                                    CatalogProvider::default(),
+                                    &query,
+                                    mode,
+                                    SearchOptions {
+                                        allow_adult: cli.allow_adult,
+                                    },
+                                )
+                                .await?
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                    Ok(results) => results,
+                    Err(error) => return Err(error),
+                };
                 'anime: loop {
                     let purpose = if cli.download {
                         SelectionPurpose::Download
@@ -480,6 +510,7 @@ enum ProviderClients {
         anikoto: AnikotoClient,
         anikoto2: AnikotoCzClient,
         jkanime: JkAnimeClient,
+        tioanime: TioAnimeClient,
         language: LanguagePreference,
     },
     #[cfg(debug_assertions)]
@@ -496,6 +527,7 @@ impl ProviderClients {
             anikoto: AnikotoClient::new()?,
             anikoto2: AnikotoCzClient::new()?,
             jkanime: JkAnimeClient::new()?,
+            tioanime: TioAnimeClient::new()?,
             language,
         })
     }
@@ -521,6 +553,7 @@ impl ProviderClients {
                 anikoto,
                 anikoto2,
                 jkanime,
+                tioanime,
                 ..
             } => match provider {
                 CatalogProvider::Anikoto => anikoto.search_with_options(query, mode, options).await,
@@ -528,6 +561,9 @@ impl ProviderClients {
                     anikoto2.search_with_options(query, mode, options).await
                 }
                 CatalogProvider::JkAnime => jkanime.search_with_options(query, mode, options).await,
+                CatalogProvider::TioAnime => {
+                    tioanime.search_with_options(query, mode, options).await
+                }
             },
             #[cfg(debug_assertions)]
             Self::Showcase { .. } => Ok(showcase_search(provider, query, options)),
@@ -546,11 +582,13 @@ impl ProviderClients {
                 anikoto,
                 anikoto2,
                 jkanime,
+                tioanime,
                 ..
             } => match routed_provider(show_id, selected) {
                 CatalogProvider::Anikoto => anikoto.episodes(show_id, mode).await,
                 CatalogProvider::Anikoto2 => anikoto2.episodes(show_id, mode).await,
                 CatalogProvider::JkAnime => jkanime.episodes(show_id, mode).await,
+                CatalogProvider::TioAnime => tioanime.episodes(show_id, mode).await,
             },
             #[cfg(debug_assertions)]
             Self::Showcase { .. } => Ok((1..=12).map(|episode| episode.to_string()).collect()),
@@ -570,11 +608,13 @@ impl ProviderClients {
                 anikoto,
                 anikoto2,
                 jkanime,
+                tioanime,
                 ..
             } => match routed_provider(show_id, selected) {
                 CatalogProvider::Anikoto => anikoto.streams(show_id, episode, mode).await,
                 CatalogProvider::Anikoto2 => anikoto2.streams(show_id, episode, mode).await,
                 CatalogProvider::JkAnime => jkanime.streams(show_id, episode, mode).await,
+                CatalogProvider::TioAnime => tioanime.streams(show_id, episode, mode).await,
             },
             #[cfg(debug_assertions)]
             Self::Showcase { .. } => Ok(showcase_streams(selected, episode)),
@@ -586,6 +626,7 @@ fn routed_provider(show_id: &str, selected: CatalogProvider) -> CatalogProvider 
     if show_id.starts_with("anikoto:")
         || show_id.starts_with("anikoto2:")
         || show_id.starts_with("jkanime:")
+        || show_id.starts_with("tioanime:")
     {
         provider_from_show_id(show_id)
     } else {
@@ -617,6 +658,7 @@ fn showcase_search(
                 CatalogProvider::Anikoto => format!("anikoto:showcase-{id}"),
                 CatalogProvider::Anikoto2 => format!("anikoto2:showcase-{id}"),
                 CatalogProvider::JkAnime => format!("jkanime:showcase-{id}"),
+                CatalogProvider::TioAnime => format!("tioanime:showcase-{id}"),
             },
             name: name.into(),
             episodes,
@@ -631,6 +673,7 @@ fn showcase_streams(provider: CatalogProvider, episode: &str) -> Vec<StreamLink>
         CatalogProvider::Anikoto => "MegaPlay Showcase",
         CatalogProvider::Anikoto2 => "Anikoto.cz Showcase",
         CatalogProvider::JkAnime => "JKAnime Showcase",
+        CatalogProvider::TioAnime => "TioAnime Showcase",
     };
     ["1080p", "720p", "480p"]
         .into_iter()
@@ -659,28 +702,52 @@ fn showcase_streams(provider: CatalogProvider, episode: &str) -> Vec<StreamLink>
 }
 
 async fn run_command(
+    demo_mode: bool,
     clients: &ProviderClients,
     selected_provider: Option<CatalogProvider>,
     command: Commands,
 ) -> Result<()> {
-    let provider = selected_provider.unwrap_or_default();
+    let language = clients.language();
     match command {
         Commands::Search(args) => {
-            let values = clients
-                .search_with_options(
-                    provider,
-                    &args.query,
-                    TranslationType::from_str(&args.mode)?,
-                    SearchOptions {
-                        allow_adult: args.allow_adult,
-                    },
-                )
-                .await?;
+            let provider = effective_search_provider(selected_provider, language);
+            let mode = TranslationType::from_str(&args.mode)?;
+            let options = SearchOptions {
+                allow_adult: args.allow_adult,
+            };
+            let attempt = clients
+                .search_with_options(provider, &args.query, mode, options)
+                .await;
+            let failed_spanish = language == LanguagePreference::Spanish
+                && provider.spanish_capable()
+                && is_fallback_trigger(&attempt);
+            let values = match attempt {
+                Ok(values) if !values.is_empty() => values,
+                _ if failed_spanish => {
+                    if offer_english_fallback(&args.query, args.json).await? {
+                        let english =
+                            ProviderClients::new(demo_mode, LanguagePreference::Default)?;
+                        english
+                            .search_with_options(
+                                CatalogProvider::default(),
+                                &args.query,
+                                mode,
+                                options,
+                            )
+                            .await?
+                    } else {
+                        return Ok(());
+                    }
+                }
+                Ok(values) => values,
+                Err(error) => return Err(error),
+            };
             output(&values, args.json, |value| {
                 format!("{}\t{} ({} episodes)", value.id, value.name, value.episodes)
             })?;
         }
         Commands::Episodes(args) => {
+            let provider = selected_provider.unwrap_or_default();
             let values = clients
                 .episodes(
                     &args.show_id,
@@ -691,6 +758,7 @@ async fn run_command(
             output(&values, args.json, |value| value.clone())?;
         }
         Commands::Links(args) => {
+            let provider = selected_provider.unwrap_or_default();
             let values = clients
                 .streams(
                     &args.show_id,
@@ -712,6 +780,7 @@ async fn run_command(
             }
         }
         Commands::Play(args) => {
+            let provider = selected_provider.unwrap_or_default();
             let mode = TranslationType::from_str(&args.mode)?;
             let streams = clients
                 .streams(&args.show_id, provider, &args.episode, mode)
@@ -729,6 +798,7 @@ async fn run_command(
                 .await?;
         }
         Commands::Download(args) => {
+            let provider = selected_provider.unwrap_or_default();
             let streams = clients
                 .streams(
                     &args.show_id,
@@ -751,6 +821,35 @@ async fn run_command(
         Commands::Update { .. } => unreachable!("update commands are handled before client setup"),
     }
     Ok(())
+}
+
+/// Explicit English fallback (TECH §7): a Spanish search on a capable
+/// provider came back empty or failed on the provider side. Never silently
+/// switches language: returns true only when the user explicitly accepts
+/// continuing in the default catalog. Non-interactive flows (pipes,
+/// `--json`) get a deterministic error instead of a prompt.
+async fn offer_english_fallback(query: &str, json: bool) -> Result<bool> {
+    if json || !std::io::stdin().is_terminal() {
+        return Err(AniError::Unavailable(format!(
+            "No Spanish version is currently available for \"{query}\"; rerun without --language es for the default catalog"
+        )));
+    }
+    println!("No Spanish version is currently available.");
+    println!();
+    println!("Available language:");
+    println!("English");
+    println!();
+    let choices = ["Yes", "No"];
+    let Some(index) = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Continue in English?")
+        .items(&choices)
+        .default(0)
+        .interact_opt()
+        .map_err(dialog_error)?
+    else {
+        return Ok(false);
+    };
+    Ok(index == 0)
 }
 
 fn output<T: Serialize>(values: &[T], json: bool, text: impl Fn(&T) -> String) -> Result<()> {
@@ -1385,6 +1484,19 @@ mod tests {
 
         assert_eq!(cli.language, Some(LanguagePreference::Spanish));
         assert_eq!(cli.query, ["black", "torch"]);
+    }
+
+    #[tokio::test]
+    async fn english_fallback_is_deterministic_without_terminal() {
+        // Test harnesses have no controlling terminal, so the prompt path
+        // must resolve to the explicit non-interactive error (never hang).
+        let error = offer_english_fallback("black torch", false)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("episode unavailable"),
+            "unexpected error: {error:?}"
+        );
     }
 
     #[test]

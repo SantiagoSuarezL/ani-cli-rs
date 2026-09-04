@@ -429,6 +429,8 @@ pub fn provider_from_show_id(show_id: &str) -> CatalogProvider {
         CatalogProvider::Anikoto2
     } else if show_id.starts_with("jkanime:") {
         CatalogProvider::JkAnime
+    } else if show_id.starts_with("tioanime:") {
+        CatalogProvider::TioAnime
     } else {
         CatalogProvider::Anikoto
     }

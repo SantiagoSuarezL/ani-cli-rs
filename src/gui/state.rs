@@ -2,8 +2,8 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 use crate::{
-    AnikotoClient, AnikotoCzClient, CatalogProvider, HlsRelay, Player, PlayerOptions, SearchResult,
-    StreamLink, TranslationType,
+    AnikotoClient, AnikotoCzClient, CatalogProvider, HlsRelay, JkAnimeClient, Player, PlayerOptions,
+    SearchResult, StreamLink, TioAnimeClient, TranslationType,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -51,6 +51,8 @@ pub struct GuiState {
     // Library clients
     pub anikoto_client: Option<AnikotoClient>,
     pub anikoto_cz_client: Option<AnikotoCzClient>,
+    pub jkanime_client: Option<JkAnimeClient>,
+    pub tioanime_client: Option<TioAnimeClient>,
     pub player: Player,
 }
 
@@ -77,6 +79,8 @@ impl GuiState {
             active_relay: None,
             anikoto_client: AnikotoClient::new().ok(),
             anikoto_cz_client: AnikotoCzClient::new().ok(),
+            jkanime_client: JkAnimeClient::new().ok(),
+            tioanime_client: TioAnimeClient::new().ok(),
             player: Player::new(PlayerOptions::default_player()),
         }
     }

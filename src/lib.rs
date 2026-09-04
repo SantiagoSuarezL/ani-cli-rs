@@ -11,6 +11,7 @@ mod i18n;
 mod jkanime;
 mod models;
 mod player;
+mod tioanime;
 
 #[cfg(feature = "gui")]
 pub mod gui;
@@ -25,6 +26,8 @@ pub use i18n::{I18n, Locale};
 pub use jkanime::{JkAnimeClient, JkAnimeClientBuilder};
 pub use models::{
     CatalogProvider, LanguagePreference, RequestHeaders, SearchOptions, SearchResult, StreamLink,
-    SubtitleTrack, TranslationType, choose_quality, expand_episode_selection, require_language,
+    SubtitleTrack, TranslationType, choose_quality, effective_search_provider,
+    expand_episode_selection, is_fallback_trigger, require_language,
 };
 pub use player::{Player, PlayerKind, PlayerOptions};
+pub use tioanime::{TioAnimeClient, TioAnimeClientBuilder};

@@ -66,6 +66,16 @@ fn invalid_jkanime_ids_fail_before_network() {
 }
 
 #[test]
+fn invalid_tioanime_ids_fail_before_network() {
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .args(["--provider", "tioanime", "episodes", "tioanime:not-base64!!!"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid input"));
+}
+
+#[test]
 fn invalid_language_fails_before_network() {
     Command::cargo_bin("ani-cli-rs")
         .unwrap()
