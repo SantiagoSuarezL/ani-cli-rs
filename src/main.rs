@@ -2,9 +2,9 @@ use std::{io::IsTerminal, path::PathBuf, str::FromStr};
 
 use ani_lib::{
     AniError, AnikotoClient, AnikotoCzClient, CatalogProvider, DownloadOptions, HistoryEntry,
-    HistoryStore, I18n, Player, PlayerKind, PlayerOptions, Result, SearchOptions, SearchResult,
-    StreamLink, TranslationType, choose_quality, download_stream, expand_episode_selection,
-    provider_from_show_id,
+    HistoryStore, I18n, JkAnimeClient, LanguagePreference, Player, PlayerKind, PlayerOptions,
+    Result, SearchOptions, SearchResult, StreamLink, TranslationType, choose_quality,
+    download_stream, expand_episode_selection, provider_from_show_id, require_language,
 };
 #[cfg(debug_assertions)]
 use ani_lib::{RequestHeaders, SubtitleTrack};
@@ -15,7 +15,7 @@ use tracing::{debug, info};
 
 mod updater;
 
-const LONG_ABOUT: &str = "A cross-platform Rust port of ani-cli for browsing, resolving, playing, and downloading anime from Anikoto providers.\n\nThe interactive workflow searches the selected subbed or dubbed catalog, lists available episodes, resolves current provider links, selects the requested quality, and opens an external player. Anikoto API/MegaPlay is the default; select the independent Anikoto.cz catalog with --provider anikoto2 or ANI_CLI_RS_PROVIDER=anikoto2. Watch history uses the Bash ani-cli tab-separated format, so an existing history directory can be reused.\n\nThe scraper and KotoCDN compatibility relay are implemented entirely in Rust; Python, curl, sed, OpenSSL, Botan, and fzf are not required. Playback uses IINA on macOS, an Android media player from Termux, and mpv on other desktops by default, with optional VLC and Syncplay integrations. Downloads prefer aria2c for parallel transfers when available, with yt-dlp, FFmpeg, and the built-in resumable downloader as fallbacks.";
+const LONG_ABOUT: &str = "A cross-platform Rust port of ani-cli for browsing, resolving, playing, and downloading anime from Anikoto providers.\n\nThe interactive workflow searches the selected subbed or dubbed catalog, lists available episodes, resolves current provider links, selects the requested quality, and opens an external player. Anikoto API/MegaPlay is the default; select the independent Anikoto.cz catalog with --provider anikoto2 or ANI_CLI_RS_PROVIDER=anikoto2. JKAnime is available experimentally with --provider jkanime. Watch history uses the Bash ani-cli tab-separated format, so an existing history directory can be reused.\n\nThe scraper and KotoCDN compatibility relay are implemented entirely in Rust; Python, curl, sed, OpenSSL, Botan, and fzf are not required. Playback uses IINA on macOS, an Android media player from Termux, and mpv on other desktops by default, with optional VLC and Syncplay integrations. Downloads prefer aria2c for parallel transfers when available, with yt-dlp, FFmpeg, and the built-in resumable downloader as fallbacks.";
 
 const AFTER_HELP: &str = "KEYBOARD NAVIGATION:\n  Arrow keys / Tab       Navigate menus\n  j / k                  Move down / up in action menus\n  h / l                  Change pages in action menus\n  Space / Enter          Select or toggle an item\n  Type                    Filter fuzzy anime/episode menus\n  Escape                 Go back immediately from a fuzzy menu\n  q / Escape             Leave an ordinary action menu\n\nEXAMPLES:\n  ani-cli-rs frieren\n  ani-cli-rs --provider anikoto2 \"black torch\"\n  ani-cli-rs --allow-adult \"search query\"\n  ani-cli-rs --dub -q 720p \"cowboy bebop\"\n  ani-cli-rs -S 1 -e 2-4 \"one piece\"\n  ani-cli-rs --continue\n  ani-cli-rs --download -e 1 \"anime title\"\n  ani-cli-rs search --allow-adult --json \"search query\"\n  ani-cli-rs links --json SHOW_ID 1 --quality 1080p\n\nTERMUX:\n  Install an Android video player; do not use the terminal VLC package.\n  --vlc requests Android VLC when explicit intents work. A compatibility fallback\n  uses Android's media handler instead. Keep Termux open for relayed HLS playback.\n\nENVIRONMENT:\n  ANI_CLI_MODE, ANI_CLI_PLAYER, ANI_CLI_DOWNLOAD_DIR, ANI_CLI_QUALITY,\n  ANI_CLI_HIST_DIR, ANI_CLI_ALLOW_ADULT, ANI_CLI_MULTI_SELECTION,\n  ANI_CLI_NO_DETACH, ANI_CLI_EXIT_AFTER_PLAY, ANI_CLI_RS_PROVIDER\n\nDEBUG LOGGING:\n  RUST_LOG=ani_cli_rs=debug,ani_cli=debug    verbose launch diagnostics\n  RUST_LOG=ani_cli_rs=trace,ani_cli=trace    full stream resolution + relay tracing\n  RUST_LOG=warn                              only warnings and errors (default off)\n\nOfficial prebuilt releases are provided for Windows and Linux. Tested macOS and Termux builds are compiled from source.";
 
@@ -30,9 +30,12 @@ const AFTER_HELP: &str = "KEYBOARD NAVIGATION:\n  Arrow keys / Tab       Navigat
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-    /// Catalog provider: anikoto (default) or anikoto2 (Anikoto.cz).
+    /// Catalog provider: anikoto2 (default), anikoto, or jkanime (experimental JKAnime).
     #[arg(short = 'p', long, global = true, env = "ANI_CLI_RS_PROVIDER")]
     provider: Option<CatalogProvider>,
+    /// Request Spanish-language content (experimental: only --language es with --provider jkanime for now).
+    #[arg(long, global = true, env = "ANI_CLI_LANGUAGE")]
+    language: Option<LanguagePreference>,
     /// Continue from the next unwatched episode in the ani-cli history.
     #[arg(short = 'c', long = "continue")]
     continue_watching: bool,
@@ -226,7 +229,7 @@ async fn run(cli: Cli) -> Result<()> {
         return display_next_episode_schedule(&query).await;
     }
 
-    let clients = ProviderClients::new(cli.demo_mode())?;
+    let clients = ProviderClients::new(cli.demo_mode(), cli.language.unwrap_or_default())?;
     if let Some(command) = cli.command {
         return run_command(&clients, cli.provider, command).await;
     }
@@ -476,21 +479,33 @@ enum ProviderClients {
     Live {
         anikoto: AnikotoClient,
         anikoto2: AnikotoCzClient,
+        jkanime: JkAnimeClient,
+        language: LanguagePreference,
     },
     #[cfg(debug_assertions)]
-    Showcase,
+    Showcase { language: LanguagePreference },
 }
 
 impl ProviderClients {
-    fn new(_showcase: bool) -> Result<Self> {
+    fn new(_showcase: bool, language: LanguagePreference) -> Result<Self> {
         #[cfg(debug_assertions)]
         if _showcase {
-            return Ok(Self::Showcase);
+            return Ok(Self::Showcase { language });
         }
         Ok(Self::Live {
             anikoto: AnikotoClient::new()?,
             anikoto2: AnikotoCzClient::new()?,
+            jkanime: JkAnimeClient::new()?,
+            language,
         })
+    }
+
+    fn language(&self) -> LanguagePreference {
+        match self {
+            Self::Live { language, .. } => *language,
+            #[cfg(debug_assertions)]
+            Self::Showcase { language } => *language,
+        }
     }
 
     async fn search_with_options(
@@ -500,15 +515,22 @@ impl ProviderClients {
         mode: TranslationType,
         options: SearchOptions,
     ) -> Result<Vec<SearchResult>> {
+        require_language(provider, self.language())?;
         match self {
-            Self::Live { anikoto, anikoto2 } => match provider {
+            Self::Live {
+                anikoto,
+                anikoto2,
+                jkanime,
+                ..
+            } => match provider {
                 CatalogProvider::Anikoto => anikoto.search_with_options(query, mode, options).await,
                 CatalogProvider::Anikoto2 => {
                     anikoto2.search_with_options(query, mode, options).await
                 }
+                CatalogProvider::JkAnime => jkanime.search_with_options(query, mode, options).await,
             },
             #[cfg(debug_assertions)]
-            Self::Showcase => Ok(showcase_search(provider, query, options)),
+            Self::Showcase { .. } => Ok(showcase_search(provider, query, options)),
         }
     }
 
@@ -518,13 +540,20 @@ impl ProviderClients {
         selected: CatalogProvider,
         mode: TranslationType,
     ) -> Result<Vec<String>> {
+        require_language(routed_provider(show_id, selected), self.language())?;
         match self {
-            Self::Live { anikoto, anikoto2 } => match routed_provider(show_id, selected) {
+            Self::Live {
+                anikoto,
+                anikoto2,
+                jkanime,
+                ..
+            } => match routed_provider(show_id, selected) {
                 CatalogProvider::Anikoto => anikoto.episodes(show_id, mode).await,
                 CatalogProvider::Anikoto2 => anikoto2.episodes(show_id, mode).await,
+                CatalogProvider::JkAnime => jkanime.episodes(show_id, mode).await,
             },
             #[cfg(debug_assertions)]
-            Self::Showcase => Ok((1..=12).map(|episode| episode.to_string()).collect()),
+            Self::Showcase { .. } => Ok((1..=12).map(|episode| episode.to_string()).collect()),
         }
     }
 
@@ -535,19 +564,29 @@ impl ProviderClients {
         episode: &str,
         mode: TranslationType,
     ) -> Result<Vec<StreamLink>> {
+        require_language(routed_provider(show_id, selected), self.language())?;
         match self {
-            Self::Live { anikoto, anikoto2 } => match routed_provider(show_id, selected) {
+            Self::Live {
+                anikoto,
+                anikoto2,
+                jkanime,
+                ..
+            } => match routed_provider(show_id, selected) {
                 CatalogProvider::Anikoto => anikoto.streams(show_id, episode, mode).await,
                 CatalogProvider::Anikoto2 => anikoto2.streams(show_id, episode, mode).await,
+                CatalogProvider::JkAnime => jkanime.streams(show_id, episode, mode).await,
             },
             #[cfg(debug_assertions)]
-            Self::Showcase => Ok(showcase_streams(selected, episode)),
+            Self::Showcase { .. } => Ok(showcase_streams(selected, episode)),
         }
     }
 }
 
 fn routed_provider(show_id: &str, selected: CatalogProvider) -> CatalogProvider {
-    if show_id.starts_with("anikoto:") || show_id.starts_with("anikoto2:") {
+    if show_id.starts_with("anikoto:")
+        || show_id.starts_with("anikoto2:")
+        || show_id.starts_with("jkanime:")
+    {
         provider_from_show_id(show_id)
     } else {
         selected
@@ -577,6 +616,7 @@ fn showcase_search(
             id: match provider {
                 CatalogProvider::Anikoto => format!("anikoto:showcase-{id}"),
                 CatalogProvider::Anikoto2 => format!("anikoto2:showcase-{id}"),
+                CatalogProvider::JkAnime => format!("jkanime:showcase-{id}"),
             },
             name: name.into(),
             episodes,
@@ -590,6 +630,7 @@ fn showcase_streams(provider: CatalogProvider, episode: &str) -> Vec<StreamLink>
     let provider_name = match provider {
         CatalogProvider::Anikoto => "MegaPlay Showcase",
         CatalogProvider::Anikoto2 => "Anikoto.cz Showcase",
+        CatalogProvider::JkAnime => "JKAnime Showcase",
     };
     ["1080p", "720p", "480p"]
         .into_iter()
@@ -1328,6 +1369,23 @@ fn dialog_error(error: dialoguer::Error) -> AniError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_flag_parses_spanish() {
+        let cli = Cli::try_parse_from([
+            "ani-cli-rs",
+            "--provider",
+            "jkanime",
+            "--language",
+            "es",
+            "black",
+            "torch",
+        ])
+        .expect("language flag should parse");
+
+        assert_eq!(cli.language, Some(LanguagePreference::Spanish));
+        assert_eq!(cli.query, ["black", "torch"]);
+    }
 
     #[test]
     fn legacy_options_can_follow_the_query() {

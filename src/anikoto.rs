@@ -427,6 +427,8 @@ impl AnikotoClient {
 pub fn provider_from_show_id(show_id: &str) -> CatalogProvider {
     if show_id.starts_with("anikoto2:") {
         CatalogProvider::Anikoto2
+    } else if show_id.starts_with("jkanime:") {
+        CatalogProvider::JkAnime
     } else {
         CatalogProvider::Anikoto
     }

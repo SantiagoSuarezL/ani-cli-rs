@@ -56,6 +56,62 @@ fn removed_allanime_provider_is_rejected() {
 }
 
 #[test]
+fn invalid_jkanime_ids_fail_before_network() {
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .args(["--provider", "jkanime", "episodes", "jkanime:not-base64!!!"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid input"));
+}
+
+#[test]
+fn invalid_language_fails_before_network() {
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .args([
+            "--provider",
+            "jkanime",
+            "search",
+            "--language",
+            "xx",
+            "black torch",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid input"));
+}
+
+#[test]
+fn regional_variant_reports_planned_support() {
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .args([
+            "--provider",
+            "jkanime",
+            "search",
+            "--language",
+            "es-419",
+            "black torch",
+        ])
+        .assert()
+        .failure()
+        // NOTE: clap renders only the thiserror Display ("invalid input");
+        // the "not supported yet" detail is asserted in the models unit test.
+        .stderr(predicate::str::contains("invalid input"));
+}
+
+#[test]
+fn spanish_on_non_spanish_provider_fails_explicitly() {
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .args(["episodes", "some-show", "--language", "es"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not available"));
+}
+
+#[test]
 fn invalid_default_anikoto_ids_fail_before_network() {
     Command::cargo_bin("ani-cli-rs")
         .unwrap()

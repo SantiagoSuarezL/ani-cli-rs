@@ -10,6 +10,7 @@ pub enum CatalogProvider {
     Anikoto,
     #[default]
     Anikoto2,
+    JkAnime,
 }
 
 impl fmt::Display for CatalogProvider {
@@ -17,6 +18,7 @@ impl fmt::Display for CatalogProvider {
         f.write_str(match self {
             Self::Anikoto => "anikoto",
             Self::Anikoto2 => "anikoto2",
+            Self::JkAnime => "jkanime",
         })
     }
 }
@@ -28,8 +30,9 @@ impl FromStr for CatalogProvider {
         match value.to_ascii_lowercase().as_str() {
             "anikoto" | "anikoto1" | "anikoto-api" => Ok(Self::Anikoto),
             "anikoto2" | "anikoto-cz" | "anikoto.cz" => Ok(Self::Anikoto2),
+            "jkanime" | "jk" | "jk-anime" => Ok(Self::JkAnime),
             _ => Err(AniError::Input(format!(
-                "provider must be anikoto or anikoto2, got {value}"
+                "provider must be anikoto, anikoto2 or jkanime, got {value}"
             ))),
         }
     }
@@ -65,6 +68,53 @@ impl FromStr for TranslationType {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LanguagePreference {
+    #[default]
+    Default,
+    Spanish,
+}
+
+impl fmt::Display for LanguagePreference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Default => "default",
+            Self::Spanish => "es",
+        })
+    }
+}
+
+impl FromStr for LanguagePreference {
+    type Err = AniError;
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "es" | "espanol" | "español" => Ok(Self::Spanish),
+            "es-419" | "es419" | "es-es" | "es_es" => Err(AniError::Input(
+                "regional Spanish variants (es-419/es-ES) are not supported yet; only --language es in this experimental phase".into(),
+            )),
+            _ => Err(AniError::Input(format!(
+                "language must be es, got {value}"
+            ))),
+        }
+    }
+}
+
+/// Minimal experimental gate: only providers with live-verified Spanish
+/// content satisfy `--language es`. JKAnime qualifies: its live episode pages
+/// expose a single "Japones Sub. Español" catalog with hardcoded subtitles
+/// (verified 2026-09-04, see `jkanime.rs`). Every other provider fails
+/// explicitly instead of silently serving its default catalog. Regional
+/// variants and cross-provider fallback arrive in a later phase.
+pub fn require_language(provider: CatalogProvider, language: LanguagePreference) -> Result<()> {
+    match (provider, language) {
+        (_, LanguagePreference::Default) => Ok(()),
+        (CatalogProvider::JkAnime, LanguagePreference::Spanish) => Ok(()),
+        (provider, LanguagePreference::Spanish) => Err(AniError::Unavailable(format!(
+            "Spanish audio/subtitles are not available from the {provider} catalog in this experimental phase"
+        ))),
+    }
+}
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SearchOptions {
     /// Include titles marked as adult by the selected catalog.
@@ -253,5 +303,47 @@ mod tests {
             vec!["2", "2.5", "3"]
         );
         assert_eq!(expand_episode_selection("-1", &eps).unwrap(), vec!["3"]);
+    }
+
+    #[test]
+    fn language_preference_parses_spanish_only() {
+        assert_eq!(
+            LanguagePreference::from_str("es").unwrap(),
+            LanguagePreference::Spanish
+        );
+        assert_eq!(
+            LanguagePreference::from_str(" ES ").unwrap(),
+            LanguagePreference::Spanish
+        );
+        assert!(LanguagePreference::from_str("xx").is_err());
+    }
+
+    #[test]
+    fn regional_variants_fail_with_planned_message() {
+        // NOTE: `AniError::Input` displays as plain "invalid input"; the
+        // detail lives in the inner message, so match the variant.
+        for variant in ["es-419", "es-ES"] {
+            match LanguagePreference::from_str(variant) {
+                Err(AniError::Input(message)) => assert!(
+                    message.contains("not supported yet"),
+                    "unexpected message for {variant}: {message}"
+                ),
+                other => panic!("expected planned Input error for {variant}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn spanish_gate_passes_default_and_jkanime_only() {
+        for provider in [
+            CatalogProvider::Anikoto,
+            CatalogProvider::Anikoto2,
+            CatalogProvider::JkAnime,
+        ] {
+            require_language(provider, LanguagePreference::Default).unwrap();
+        }
+        require_language(CatalogProvider::JkAnime, LanguagePreference::Spanish).unwrap();
+        assert!(require_language(CatalogProvider::Anikoto, LanguagePreference::Spanish).is_err());
+        assert!(require_language(CatalogProvider::Anikoto2, LanguagePreference::Spanish).is_err());
     }
 }
