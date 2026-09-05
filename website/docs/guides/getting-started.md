@@ -30,6 +30,30 @@ ani-cli-rs --allow-adult "search query"
 
 `--dub` changes the translation catalog. `--allow-adult` permits adult-marked search results; it does not disable network or router filtering.
 
+## Spanish language (experimental)
+
+English remains the default — `--language es` is purely additive.
+
+```console
+# Interactive: fan-out JKAnime + TioAnime, picker shows [jkanime]/[tioanime]
+ani-cli-rs --language es "black torch"
+
+# Narrow to one Spanish catalog
+ani-cli-rs --language es --provider jkanime "black torch"
+ani-cli-rs --language es --provider tioanime "black torch"
+
+# Scriptable (stable IDs jkanime: / tioanime:)
+ani-cli-rs --language es search --json "black torch"
+ani-cli-rs --language es episodes jkanime:black-torch --json
+ani-cli-rs --language es links jkanime:black-torch 1 --json --quality best
+ani-cli-rs --language es play jkanime:black-torch 1 --quality best
+
+# Env var equivalent
+ANI_CLI_LANGUAGE=es ani-cli-rs "black torch"
+```
+
+Flow messages: `Searching providers... (JKAnime + TioAnime + language: es)` → `✓ <title>` → `Season:` → `Opening best available stream...`. Quality defaults to `best` and provider failures are isolated. If no Spanish version exists, interactive mode offers an explicit English fallback (`Yes/No`); non-interactive/`--json` returns a deterministic error instead. Regional variants `--language es-419` / `es-ES` are not yet supported (only generic `es`).
+
 ## Quality
 
 ```console

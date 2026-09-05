@@ -27,7 +27,8 @@ Run `ani-cli-rs --help` or `ani-cli-rs <COMMAND> --help` for the authoritative h
 | `--exit-after-play` | Treat an attached player's failure as a CLI failure |
 | `-N`, `--nextep-countdown` | Show release schedule and exit |
 | `-U`, `--update` | Install the latest release |
-| `-p`, `--provider VALUE` | Select `anikoto` (default) or `anikoto2` (Anikoto.cz) |
+| `-p`, `--provider VALUE` | Select `anikoto` (default), `anikoto2` (Anikoto.cz), `jkanime` or `tioanime` (Spanish, requires `--language es`) |
+| `--language VALUE` | `es` (experimental): fan-out search over JKAnime + TioAnime in parallel; use with `--provider jkanime` / `tioanime` to narrow to one catalog. Env `ANI_CLI_LANGUAGE=es` |
 | `-V`, `--version` | Print the version |
 
 Options may appear before, between, or after query words where Clap can interpret them unambiguously.
@@ -55,13 +56,27 @@ Text output is tab-separated and begins with the show ID. JSON output is recomme
 ```console
 ani-cli-rs search --json "frieren"
 ani-cli-rs --provider anikoto2 search --json "black torch"
+ani-cli-rs --language es search --json "black torch"
+ani-cli-rs --language es --provider jkanime search --json "black torch"
+ani-cli-rs --language es --provider tioanime search --json "black torch"
 ```
+
+## Spanish language (experimental)
+
+`--language es` is additive — English flows remain the default and are unchanged.
+
+- **Interactive:** `ani-cli-rs --language es "black torch"` fans out to `jkanime` + `tioanime` in parallel (`tokio::join!`), merges in reliability order (JKAnime first, preserves `--select-nth` ordering), and tags the picker as `Name (N episodes) [jkanime]` / `[tioanime]`. Add `--provider jkanime` or `--provider tioanime` to narrow to one catalog.
+- **Scriptable:** `ani-cli-rs --language es search --json "black torch"` returns `jkanime:` / `tioanime:` IDs; pass them to `episodes`/`links`/`play`/`download` with `--language es` (e.g., `ani-cli-rs --language es episodes jkanime:black-torch --json`). Provider failures are isolated per `ARCHITECTURE.md` §10.
+- **Quality:** `-q/--quality best` (default) works unchanged; HLS (JKAnime) and MP4 direct `YourUpload` with `Referer` (TioAnime) are both supported.
+- **Fallback:** if no Spanish results exist, interactive mode prompts `No Spanish version is currently available. Continue in English? Yes/No`; non-interactive mode (`--json` or piped stdin) returns a deterministic error instructing to rerun without `--language es`.
+- **Variants:** `--language es-419` / `es-ES` are not yet supported and return a planned-support error; only generic `es` is available (no provider currently distinguishes regional variants).
+- **Env:** `ANI_CLI_LANGUAGE=es` is equivalent to `--language es`.
 
 ## Show IDs
 
 The scriptable commands do not search anime names. They require the ID returned by `search`.
 
-Anikoto API IDs begin with `anikoto:` and Anikoto.cz IDs begin with `anikoto2:`. Both route automatically. A raw numeric Anikoto API series ID is accepted with `--provider anikoto`; a raw Anikoto.cz slug is accepted with `--provider anikoto2`. `--title` changes a player title or output filename; it is not a search query.
+Anikoto API IDs begin with `anikoto:` and Anikoto.cz IDs begin with `anikoto2:`. Spanish IDs begin with `jkanime:` and `tioanime:` (require `--language es`). All prefixes route automatically, including history. A raw numeric Anikoto API series ID is accepted with `--provider anikoto`; a raw Anikoto.cz slug is accepted with `--provider anikoto2`; a raw JKAnime/TioAnime slug is accepted with `--provider jkanime` / `--provider tioanime` plus `--language es`. `--title` changes a player title or output filename; it is not a search query.
 
 ## `episodes`
 

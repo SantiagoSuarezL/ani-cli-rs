@@ -170,9 +170,41 @@ impl TioAnimeClient {
             .send()
             .await?;
         let payload = checked_json(response, "TioAnime").await?;
-        let values = parse_search(&payload)?;
+        let mut values = parse_search(&payload)?;
+        if !values.is_empty() {
+            let enrich_len = values.len().min(6);
+            let counts = self.enrich_episode_counts(&values[..enrich_len]).await;
+            for (idx, count) in counts.into_iter().enumerate() {
+                if count > 0.0 {
+                    values[idx].episodes = count;
+                }
+            }
+        }
         cache_put(&self.inner.searches, cache_key, values.clone());
         Ok(values)
+    }
+
+    async fn enrich_episode_counts(&self, results: &[SearchResult]) -> Vec<f64> {
+        use futures_util::future::join_all;
+        let futures = results.iter().map(|result| {
+            let client = self.clone();
+            let id = result.id.clone();
+            async move {
+                match tokio::time::timeout(
+                    Duration::from_secs(8),
+                    client.episodes(&id, TranslationType::Sub),
+                )
+                .await
+                {
+                    Ok(Ok(episodes)) => episodes.len() as f64,
+                    _ => 0.0,
+                }
+            }
+        });
+        match tokio::time::timeout(Duration::from_secs(15), join_all(futures)).await {
+            Ok(counts) => counts,
+            Err(_) => vec![0.0; results.len()],
+        }
     }
 
     pub async fn episodes(&self, show_id: &str, _mode: TranslationType) -> Result<Vec<String>> {
@@ -250,7 +282,18 @@ impl TioAnimeClient {
         let media = parse_yourupload_media(&html).ok_or_else(|| {
             AniError::Provider("YourUpload page exposed no direct media URL".into())
         })?;
-        let parsed = validate_remote_url(&media)?;
+        // Deleted/expired YourUpload files serve `og:video=/embed/novideo.mp4`
+        // and `jwplayer file: '/embed/novideo.mp4'` — not a real video.
+        if media.contains("novideo") {
+            return Err(AniError::Provider(
+                "YourUpload video removed or unavailable (novideo.mp4) — try another episode (e.g., 2) or provider JKAnime".into(),
+            ));
+        }
+        let parsed = validate_remote_url(&media).map_err(|_| {
+            AniError::Provider(format!(
+                "YourUpload returned an invalid media URL `{media}` — video may be removed"
+            ))
+        })?;
         Ok(StreamLink {
             url: parsed.to_string(),
             // The embed carries no quality metadata; the anime pages only

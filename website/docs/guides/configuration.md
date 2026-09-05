@@ -17,7 +17,8 @@ ani-cli-rs uses command-line options for one-off choices and environment variabl
 | `ANI_CLI_EXIT_AFTER_PLAY` | Propagate attached player failures |
 | `ANI_CLI_RS_INSTALL_DIR` | Installer/uninstaller target directory |
 | `ANI_CLI_RS_PROFILE` | Unix profile modified by install/uninstall scripts |
-| `ANI_CLI_RS_PROVIDER` | Changes the default provider used by `ani-cli-rs`. Available providers: `anikoto`/`anikoto2` |
+| `ANI_CLI_RS_PROVIDER` | Changes the default provider used by `ani-cli-rs`. Available providers: `anikoto`/`anikoto2`/`jkanime`/`tioanime` |
+| `ANI_CLI_LANGUAGE` | Language preference: `es` (experimental, fans out to `jkanime`+`tioanime` unless `--provider` narrows it) |
 
 Boolean variables recognize `1`, `true`, or `yes` where consumed as application booleans.
 

@@ -925,13 +925,20 @@ fn select_search_result(
             .any(|value| value.provider != results[0].provider);
         let mut items = vec!["← Back to search".to_owned()];
         items.extend(results.iter().map(|value| {
+            let has_count = value.episodes.is_finite() && value.episodes > 0.0;
             if show_provider {
-                format!(
-                    "{} ({} episodes) [{}]",
-                    value.name, value.episodes, value.provider
-                )
-            } else {
+                if has_count {
+                    format!(
+                        "{} ({} episodes) [{}]",
+                        value.name, value.episodes, value.provider
+                    )
+                } else {
+                    format!("{} [{}]", value.name, value.provider)
+                }
+            } else if has_count {
                 format!("{} ({} episodes)", value.name, value.episodes)
+            } else {
+                value.name.clone()
             }
         }));
         let Some(index) = FuzzySelect::with_theme(&ColorfulTheme::default())

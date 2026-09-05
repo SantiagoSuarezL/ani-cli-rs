@@ -170,9 +170,61 @@ impl JkAnimeClient {
             segments.push("buscar").push(query);
         }
         let html = self.get_text(url.as_str(), &self.inner.base, false).await?;
-        let values = parse_search(&self.inner.base, &html)?;
+        let mut values = parse_search(&self.inner.base, &html)?;
+        // Enrich search results with real episode counts when cheap:
+        // `parse_search` has no count (cards lack it), but the anime page +
+        // ajax endpoint do. Best-effort, never fails search; cap at 6 to
+        // avoid spamming the provider and keep the picker snappy (first 6
+        // get counts, rest stay 0 and are hidden in the picker per main.rs).
+        if !values.is_empty() {
+            let enrich_len = values.len().min(6);
+            let counts = self.enrich_episode_counts(&values[..enrich_len]).await;
+            for (idx, count) in counts.into_iter().enumerate() {
+                if count > 0.0 {
+                    values[idx].episodes = count;
+                }
+            }
+        }
         cache_put(&self.inner.searches, cache_key, values.clone());
         Ok(values)
+    }
+
+    async fn enrich_episode_counts(&self, results: &[SearchResult]) -> Vec<f64> {
+        use futures_util::future::join_all;
+        let futures = results.iter().map(|result| {
+            let client = self.clone();
+            let id = result.id.clone();
+            async move {
+                match tokio::time::timeout(Duration::from_secs(6), client.episode_count(&id)).await
+                {
+                    Ok(Ok(count)) => count as f64,
+                    _ => 0.0,
+                }
+            }
+        });
+        match tokio::time::timeout(Duration::from_secs(10), join_all(futures)).await {
+            Ok(counts) => counts,
+            Err(_) => vec![0.0; results.len()],
+        }
+    }
+
+    async fn episode_count(&self, show_id: &str) -> Result<usize> {
+        let id = decode_id(show_id)?;
+        let anime_id = match id.anime_id.clone() {
+            Some(anime_id) => anime_id,
+            None => self.discover_anime_id(&id.slug).await?.0,
+        };
+        // Single page is enough for the total; avoids fetching 25 pages.
+        let first = self.episode_page(&id.slug, &anime_id, 1).await?;
+        if first.total > 0 {
+            return Ok(first.total as usize);
+        }
+        if !first.data.is_empty() {
+            return Ok(first.data.len());
+        }
+        // empty ajax: try fallback parser (last episode link)
+        let fallback = self.episode_fallback(&id.slug).await?;
+        Ok(fallback.len())
     }
 
     pub async fn episodes(&self, show_id: &str, _mode: TranslationType) -> Result<Vec<String>> {

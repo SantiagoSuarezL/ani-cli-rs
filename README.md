@@ -182,7 +182,9 @@ ani-cli-rs --continue
 ani-cli-rs --download "anime title"
 ani-cli-rs --allow-adult "search query"
 ani-cli-rs --provider anikoto2 "black torch"
-ani-cli-rs --language es "black torch"
+ani-cli-rs --language es "black torch"                      # Spanish: fan-out JKAnime + TioAnime
+ani-cli-rs --language es --provider jkanime "black torch"   # Spanish: single catalog
+ani-cli-rs search --language es --json "black torch"        # Spanish: scriptable
 ```
 
 Termux examples:
@@ -221,12 +223,15 @@ Supported compatibility flags include:
 -a, --allow-adult         Include adult results
 -N, --nextep-countdown    Show release timing
 -U, --update              Update from GitHub Releases
--p, --provider            anikoto (default) or anikoto2
+-p, --provider            anikoto (default), anikoto2, jkanime, tioanime (es)
+    --language             es (experimental Spanish fan-out JKAnime+TioAnime)
     --dub                  Use dubbed results
     --multi-selection      Select multiple episodes
     --no-detach            Keep the player attached
     --exit-after-play      Skip the post-playback menu
 ```
+
+Spanish catalogs (`jkanime`, `tioanime`) require `--language es`; without it they are rejected. `--language es` without `--provider` fans out to both catalogs in parallel, merges in reliability order (JKAnime first), and tags picker entries as `[jkanime]` / `[tioanime]`. See [CLI reference](https://vorlie.github.io/ani-cli-rs/reference/cli/) for scriptable `search`/`episodes`/`links` with `jkanime:` / `tioanime:` IDs and explicit English fallback behavior.
 
 Run `ani-cli-rs --help` for the authoritative list. Environment variables and keyboard controls are documented in the [CLI reference](https://vorlie.github.io/ani-cli-rs/reference/cli/).
 
@@ -235,6 +240,10 @@ Run `ani-cli-rs --help` for the authoritative list. Environment variables and ke
 ```console
 ani-cli-rs search --json "frieren"
 ani-cli-rs -p anikoto2 search --json "black torch"
+ani-cli-rs --language es search --json "black torch"                          # es fan-out (jkanime + tioanime)
+ani-cli-rs --language es --provider jkanime search --json "black torch"       # es single catalog
+ani-cli-rs --language es episodes --json jkanime:black-torch --mode sub
+ani-cli-rs --language es links --json jkanime:black-torch 1 --quality best
 ani-cli-rs episodes --json SHOW_ID --mode sub
 ani-cli-rs links --json SHOW_ID 1 --quality 1080p
 ani-cli-rs play SHOW_ID 1 --title "Frieren" --no-detach
@@ -244,7 +253,7 @@ ani-cli-rs update --check
 
 `episodes`, `links`, `play`, and `download` require the **show ID returned by `search`**, not an anime title.
 
-Anikoto API results have IDs beginning with `anikoto:`. Anikoto.cz results begin with `anikoto2:`. Both prefixes route automatically, including history entries. Raw numeric Anikoto API IDs require `--provider anikoto`; raw Anikoto.cz slugs require `--provider anikoto2`.
+Anikoto API results have IDs beginning with `anikoto:`. Anikoto.cz results begin with `anikoto2:`. Spanish results begin with `jkanime:` and `tioanime:` and require `--language es` (e.g., `jkanime:black-torch`). All prefixes route automatically, including history entries. Raw numeric Anikoto API IDs require `--provider anikoto`; raw Anikoto.cz slugs require `--provider anikoto2`; raw JKAnime/TioAnime slugs require `--provider jkanime` / `--provider tioanime` plus `--language es`.
 
 Use `ani-cli-rs --download "anime title"` when you want interactive name, season, and episode selection.
 

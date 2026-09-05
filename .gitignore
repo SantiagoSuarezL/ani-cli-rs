@@ -26,3 +26,10 @@ showcase/.tools/
 showcase/output/
 
 ani-cli-anikoto2/
+
+.agent/
+.claude/
+.opencode/
+graphify-out/
+opencode.json
+CLAUDE.md
