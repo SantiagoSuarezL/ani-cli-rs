@@ -34,6 +34,15 @@ impl CatalogProvider {
     pub fn spanish_capable(self) -> bool {
         matches!(self, Self::JkAnime | Self::TioAnime)
     }
+
+    /// Spanish providers in reliability order (ARCH §6 #5 tie-breaker).
+    /// JKAnime first: it is the historic `--language es` auto-route target,
+    /// so merged results keep backward-compatible ordering (`--select-nth`
+    /// keeps picking the same entry when JKAnime is non-empty). TioAnime
+    /// appends after. Reorder only with fresh live reliability evidence.
+    pub fn spanish_providers() -> [Self; 2] {
+        [Self::JkAnime, Self::TioAnime]
+    }
 }
 
 impl FromStr for CatalogProvider {
@@ -128,6 +137,17 @@ pub fn effective_search_provider(
     }
 }
 
+/// Whether a `--language es` search without an explicit `--provider` should
+/// fan out to every Spanish-capable catalog instead of a single auto-route
+/// target (ARCH §7 "Other provider" layer + ARCH §10 isolation). An explicit
+/// `--provider` always wins and never fans out.
+pub fn should_fanout_spanish(
+    selected: Option<CatalogProvider>,
+    language: LanguagePreference,
+) -> bool {
+    selected.is_none() && language == LanguagePreference::Spanish
+}
+
 /// Whether a failed/empty Spanish search should offer the explicit English
 /// fallback (TECH §7) instead of propagating the error: provider-side
 /// failures (network, malformed data, rate limits, nothing found) qualify;
@@ -135,8 +155,16 @@ pub fn effective_search_provider(
 pub fn is_fallback_trigger<T>(result: &Result<T>) -> bool {
     match result {
         Ok(_) => true, // callers only pass through here when results are empty
-        Err(
-            AniError::Network(_)
+        Err(error) => is_fallback_error(error),
+    }
+}
+
+/// Provider-side failure predicate behind [`is_fallback_trigger`], exposed so
+/// multi-provider merges can classify an owned error without cloning it.
+pub fn is_fallback_error(error: &AniError) -> bool {
+    matches!(
+        error,
+        AniError::Network(_)
             | AniError::Provider(_)
             | AniError::Catalog { .. }
             | AniError::ProviderRateLimited { .. }
@@ -144,9 +172,36 @@ pub fn is_fallback_trigger<T>(result: &Result<T>) -> bool {
             | AniError::UnavailableNoResults
             | AniError::UnavailableNoEpisodes
             | AniError::UnavailableNoStreams,
-        ) => true,
-        Err(_) => false,
+    )
+}
+
+/// Merges the two Spanish catalog searches in [`CatalogProvider::spanish_providers`]
+/// order (JKAnime first for backward-compatible `--select-nth`).
+/// Provider-side failures ([`is_fallback_error`]) are isolated per ARCH §10:
+/// a failing catalog contributes nothing while the other still serves. A
+/// non-fallback error (empty query, local bug) fails fast and never merges.
+/// When every catalog fails with a fallback error, the last one is returned
+/// so callers still enter the explicit English-fallback path.
+pub fn merge_spanish_search(
+    jk: Result<Vec<SearchResult>>,
+    tio: Result<Vec<SearchResult>>,
+) -> Result<Vec<SearchResult>> {
+    let mut merged = Vec::new();
+    let mut trigger_error: Option<AniError> = None;
+    for result in [jk, tio] {
+        match result {
+            Ok(values) => merged.extend(values),
+            Err(error) if is_fallback_error(&error) => trigger_error = Some(error),
+            Err(error) => return Err(error),
+        }
     }
+    if !merged.is_empty() {
+        return Ok(merged);
+    }
+    if let Some(error) = trigger_error {
+        return Err(error);
+    }
+    Ok(merged)
 }
 
 /// Minimal experimental gate: only providers with live-verified Spanish
@@ -412,10 +467,7 @@ mod tests {
         );
         for provider in [P::Anikoto, P::Anikoto2, P::JkAnime, P::TioAnime] {
             assert!(provider.spanish_capable() == matches!(provider, P::JkAnime | P::TioAnime));
-            for language in [
-                LanguagePreference::Default,
-                LanguagePreference::Spanish,
-            ] {
+            for language in [LanguagePreference::Default, LanguagePreference::Spanish] {
                 assert_eq!(
                     effective_search_provider(Some(provider), language),
                     provider
@@ -431,14 +483,106 @@ mod tests {
         assert!(is_fallback_trigger::<Vec<SearchResult>>(&Err(
             AniError::UnavailableNoResults
         )));
-        assert!(is_fallback_trigger::<Vec<SearchResult>>(&Err(AniError::Network(
-            "down".into()
-        ))));
+        assert!(is_fallback_trigger::<Vec<SearchResult>>(&Err(
+            AniError::Network("down".into())
+        )));
         assert!(!is_fallback_trigger::<Vec<SearchResult>>(&Err(
             AniError::InputEmptyQuery
         )));
         assert!(!is_fallback_trigger::<Vec<SearchResult>>(&Err(
             AniError::InputSelectionOutOfRange
         )));
+    }
+
+    #[test]
+    fn spanish_providers_returns_jk_tio_in_order() {
+        let providers = CatalogProvider::spanish_providers();
+        assert_eq!(providers[0], CatalogProvider::JkAnime);
+        assert_eq!(providers[1], CatalogProvider::TioAnime);
+    }
+
+    #[test]
+    fn should_fanout_spanish_requires_no_provider_and_es() {
+        assert!(should_fanout_spanish(None, LanguagePreference::Spanish));
+        assert!(!should_fanout_spanish(
+            Some(CatalogProvider::JkAnime),
+            LanguagePreference::Spanish
+        ));
+        assert!(!should_fanout_spanish(None, LanguagePreference::Default));
+        assert!(!should_fanout_spanish(
+            Some(CatalogProvider::TioAnime),
+            LanguagePreference::Default
+        ));
+    }
+
+    #[test]
+    fn is_fallback_error_classifies_provider_side_only() {
+        assert!(is_fallback_error(&AniError::Network("x".into())));
+        assert!(is_fallback_error(&AniError::Provider("x".into())));
+        assert!(is_fallback_error(&AniError::Catalog {
+            provider: "x".into(),
+            message: "y".into()
+        }));
+        assert!(is_fallback_error(&AniError::ProviderRateLimited {
+            provider: "x".into(),
+            retry_after_seconds: 1
+        }));
+        assert!(is_fallback_error(&AniError::Unavailable("x".into())));
+        assert!(is_fallback_error(&AniError::UnavailableNoResults));
+        assert!(is_fallback_error(&AniError::UnavailableNoEpisodes));
+        assert!(is_fallback_error(&AniError::UnavailableNoStreams));
+        assert!(!is_fallback_error(&AniError::InputEmptyQuery));
+        assert!(!is_fallback_error(&AniError::InputSelectionOutOfRange));
+        assert!(!is_fallback_error(&AniError::Input("x".into())));
+    }
+
+    #[test]
+    fn merge_spanish_search_concats_jk_then_tio() {
+        let jk = Ok(vec![SearchResult {
+            id: "jkanime:a".into(),
+            name: "A".into(),
+            episodes: 1.0,
+            provider: CatalogProvider::JkAnime,
+        }]);
+        let tio = Ok(vec![SearchResult {
+            id: "tioanime:b".into(),
+            name: "B".into(),
+            episodes: 1.0,
+            provider: CatalogProvider::TioAnime,
+        }]);
+        let merged = merge_spanish_search(jk, tio).unwrap();
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].provider, CatalogProvider::JkAnime);
+        assert_eq!(merged[1].provider, CatalogProvider::TioAnime);
+    }
+
+    #[test]
+    fn merge_spanish_search_isolates_provider_failures() {
+        let jk = Ok(vec![SearchResult {
+            id: "jkanime:a".into(),
+            name: "A".into(),
+            episodes: 1.0,
+            provider: CatalogProvider::JkAnime,
+        }]);
+        let tio = Err(AniError::Network("tio down".into()));
+        let merged = merge_spanish_search(jk, tio).unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].provider, CatalogProvider::JkAnime);
+    }
+
+    #[test]
+    fn merge_spanish_search_all_fail_returns_last_fallback_error() {
+        let jk = Err(AniError::Network("jk down".into()));
+        let tio = Err(AniError::UnavailableNoResults);
+        let err = merge_spanish_search(jk, tio).unwrap_err();
+        assert!(is_fallback_error(&err));
+    }
+
+    #[test]
+    fn merge_spanish_search_non_fallback_fails_fast() {
+        let jk = Err(AniError::InputEmptyQuery);
+        let tio = Ok(vec![]);
+        let err = merge_spanish_search(jk, tio).unwrap_err();
+        assert!(matches!(err, AniError::InputEmptyQuery));
     }
 }

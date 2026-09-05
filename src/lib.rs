@@ -27,7 +27,8 @@ pub use jkanime::{JkAnimeClient, JkAnimeClientBuilder};
 pub use models::{
     CatalogProvider, LanguagePreference, RequestHeaders, SearchOptions, SearchResult, StreamLink,
     SubtitleTrack, TranslationType, choose_quality, effective_search_provider,
-    expand_episode_selection, is_fallback_trigger, require_language,
+    expand_episode_selection, is_fallback_error, is_fallback_trigger, merge_spanish_search,
+    require_language, should_fanout_spanish,
 };
 pub use player::{Player, PlayerKind, PlayerOptions};
 pub use tioanime::{TioAnimeClient, TioAnimeClientBuilder};
