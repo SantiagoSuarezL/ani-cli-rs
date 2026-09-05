@@ -109,6 +109,10 @@ Retry once, or select the other catalog with `--provider anikoto2` or `--provide
 
 Repeated rapid retries can prolong upstream throttling.
 
+## HLS video pauses or buffers frequently even on fast connections
+
+JKAnime HLS streams may pause to buffer on fast links (e.g., 850 Mbps cable) because segmented HLS needs a larger mpv cache than the default. Since version 0.10.2, ani-cli-rs applies generous cache settings (`--cache-secs=120 --demuxer-max-bytes=512MiB`) to all HLS streams, not just those passing through the Anikoto/KotoCDN relay. If you are on an older version, this can look like a slow internet issue despite a fast connection.
+
 ## A title works but another does not
 
 Different episodes use different third-party hosts. One show can resolve through MegaPlay or VidTube while another has only unsupported or deleted embeds. Include the show ID, episode, mode, version, and sanitized provider categories in a bug report.

@@ -1,9 +1,42 @@
+# ani-cli-rs 0.10.2
+
+## Unreleased
+
+### Search history (`--history`)
+- `SearchHistory` stored in a separate `ani-search-hsts` file (not the Bash-compat `ani-hsts` watch log), capped at 50 entries, deduplicated, newest-first.
+- Interactive flow offers recent queries in a picker before the typing prompt; `--select-nth` and pipes keep historic straight-to-prompt behavior.
+- New subcommand `history --json` / `history --clear`; `-D`/`--delete` keeps deleting just the Bash-compat watch log.
+- Suite 124 OK (86 lib + 23 bin + 19 CLI); tests isolate `ANI_CLI_HIST_DIR` for every CLI test that executes `search` (Regla 11.1).
+
+### Fix decode IDs sin padding + retry JKAnime (Phase 12)
+- `decode_id` in `jkanime.rs`/`tioanime.rs` now tries base64+JSON first and slug second — One Punch Man 3 (unpadded base64 that matched the slug regex) was routing to `/{base64}/` → HTTP 404; Black Torch worked only because its base64 ends in `==`.
+- JKAnime `get_text`/`post_text` retry once after 800 ms on catalog HTTP 404 (transient WAF burst load), verified live with One Punch Man 3 episode 2 HLS; 2 wiremock tests + 2 regression tests with real unpadded IDs.
+- Suite 128 OK (86 lib + 23 bin + 19 CLI).
+
+### HLS cache generoso en mpv (Phase 13 / Regla 13.1)
+- JKAnime HLS streams stalled every few seconds on fast links (850 Mbps cable) because mpv used its tiny default cache for segmented HLS — not a bandwidth issue but a buffer one. The `mpv_options` guard only applied generous cache (`--cache=yes --cache-secs=120 --demuxer-max-bytes=512MiB`) when `stream.hls && requires_hls_relay(stream)`, which only matched Anikoto/KotoCDN hosts; JKAnime direct HLS and the `127.0.0.1` relay URL both gave `false`. Fix: apply cache tuning to all `stream.hls` regardless of host/provider; MP4 progressive streams untouched.
+- New regression test `hls_streams_get_generous_cache_even_without_anikoto_host` covers JKAnime direct + verifies MP4 does not receive cache flags.
+- Suite 129 OK (87 lib + 23 bin + 19 CLI).
+
+### TioAnime browser-only UX improvements (this cycle)
+- **Opción 1 — Error message:** `browser_fallback_suffix` now says: `"This episode on TioAnime only has browser-only servers (Mega, Voe, Netu, etc.) — YourUpload was removed upstream (novideo.mp4). Try another episode (e.g., 2) or provider JKAnime, or open in a browser: <links>"` — clearly naming the servers and explaining the situation.
+- **Opción 2 — Auto-skip:** When an episode fails with a browser-only error (TioAnime with Mega/Voe/Netu/YourUpload-novideo), `play_or_download_with_skip` automatically tries the next available episode and prints: `"⚠ Episode X of "Anime" is only available on browser-only servers (Mega, Voe, Netu, etc.) — not playable directly in the CLI. Auto-skipping to episode Y..."`. If it was the last episode, the original error is returned. Works in both the main playback loop and `interactive_after_play`. Helper `is_browser_only_error` exported from `ani_lib` root.
+- Mega/Voe/Netu/VidGuard stay browser-only: Voe hides behind `eugenemakedraw.com` + obfuscated player, Mega needs its file-key API, Netu behind Cloudflare challenges — verified live 2026-09-05 and intentionally not reverse-engineered (Regla 10.1).
+- Suite 129 OK.
+
+### `clippy --all-targets -- -D warnings` on toolchain 1.96
+- 14 `ok_or_else(|| …)` → `ok_or(…)` fixes in unit-variant sites; no behavior change.
+
+### Full test suite
+- Suite 129 OK (87 lib + 23 bin + 19 CLI).
+
+**Full changelog:** [0.10.1...0.10.2](https://github.com/vorlie/ani-cli-rs/compare/v0.10.1...v0.10.2)
+
+---
+
 # ani-cli-rs 0.10.1
 
-## Unreleased (post-0.10.1 polish, 2026-09-05)
-- `cargo clippy --all-targets -- -D warnings` passes on toolchain 1.96 (`ok_or_else(|| …)` → `ok_or(…)` for 14 unit-variant sites; no behavior change).
-- TioAnime per-episode fallback: removed `YourUpload` files (`novideo.mp4`) now list sibling Mega/Voe servers with browser URLs in the resolution error (`is_novideo_error` + `browser_fallback_suffix`, 2 new unit tests). Mega/Voe stay browser-only: Voe hides behind `eugenemakedraw.com` + obfuscated player, Mega needs its file-key API — both verified live 2026-09-05 and intentionally not reverse-engineered.
-- Suite 118 OK (80 lib + 21 bin + 17 CLI); test de fallback inglés hermético al TTY (`should_prompt_english_fallback`); release binary + Scoop/cargo shims rebuilt at 0.10.1.
+## Released 2026-09-05
 
 ## Spanish language experimental support (`--language es`)
 
