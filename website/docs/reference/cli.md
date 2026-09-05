@@ -61,6 +61,18 @@ ani-cli-rs --language es --provider jkanime search --json "black torch"
 ani-cli-rs --language es --provider tioanime search --json "black torch"
 ```
 
+Every executed search (interactive or scriptable, non-empty query) is appended to a capped per-query log (`ani-search-hsts`, newest-first, last 50, de-duplicated), stored next to the watch log and honoring `ANI_CLI_HIST_DIR`. The interactive flow offers recent queries in a picker before the typing prompt; `--select-nth` and pipes keep the historic straight-to-prompt behavior.
+
+## `history`
+
+```console
+ani-cli-rs history
+ani-cli-rs history --json
+ani-cli-rs history --clear
+```
+
+Text output is tab-separated `query\tcontext` (newest first); JSON adds the unix `timestamp`. The context records the search scope (`es via jkanime+tioanime`, `es via jkanime`, `anikoto2`, ...). `history --clear` empties only the search log: `-D`/`--delete` keeps deleting just the Bash-compatible watch log.
+
 ## Spanish language (experimental)
 
 `--language es` is additive — English flows remain the default and are unchanged.

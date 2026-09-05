@@ -74,6 +74,8 @@ The public API currently includes:
 * `download_stream`
 * `HistoryStore`
 * `HistoryEntry`
+* `SearchHistory`
+* `SearchEntry`
 * `Player`
 * `PlayerKind`
 * `PlayerOptions`
@@ -250,6 +252,7 @@ ani-cli-rs episodes --json SHOW_ID --mode sub
 ani-cli-rs links --json SHOW_ID 1 --quality 1080p
 ani-cli-rs play SHOW_ID 1 --title "Frieren" --no-detach
 ani-cli-rs download SHOW_ID 1 --output ./downloads
+ani-cli-rs history --json
 ani-cli-rs update --check
 ```
 

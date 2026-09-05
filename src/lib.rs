@@ -20,7 +20,7 @@ pub use anikoto::{AnikotoClient, AnikotoClientBuilder, provider_from_show_id, re
 pub use anikoto_cz::{AnikotoCzClient, AnikotoCzClientBuilder};
 pub use download::{DownloadOptions, download_stream};
 pub use error::{AniError, Result};
-pub use history::{HistoryEntry, HistoryStore};
+pub use history::{HistoryEntry, HistoryStore, SEARCH_HISTORY_LIMIT, SearchEntry, SearchHistory};
 pub use hls_relay::{HlsRelay, relay_stream, relay_stream_without_hls_subtitles};
 pub use i18n::{I18n, Locale};
 pub use jkanime::{JkAnimeClient, JkAnimeClientBuilder};

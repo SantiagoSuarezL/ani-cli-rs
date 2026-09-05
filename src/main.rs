@@ -3,10 +3,10 @@ use std::{io::IsTerminal, path::PathBuf, str::FromStr};
 use ani_lib::{
     AniError, AnikotoClient, AnikotoCzClient, CatalogProvider, DownloadOptions, HistoryEntry,
     HistoryStore, I18n, JkAnimeClient, LanguagePreference, Player, PlayerKind, PlayerOptions,
-    Result, SearchOptions, SearchResult, StreamLink, TioAnimeClient, TranslationType,
-    choose_quality, download_stream, effective_search_provider, expand_episode_selection,
-    is_fallback_trigger, merge_spanish_search, provider_from_show_id, require_language,
-    should_fanout_spanish,
+    Result, SearchEntry, SearchHistory, SearchOptions, SearchResult, StreamLink, TioAnimeClient,
+    TranslationType, choose_quality, download_stream, effective_search_provider,
+    expand_episode_selection, is_fallback_trigger, merge_spanish_search, provider_from_show_id,
+    require_language, should_fanout_spanish,
 };
 #[cfg(debug_assertions)]
 use ani_lib::{RequestHeaders, SubtitleTrack};
@@ -117,6 +117,8 @@ enum Commands {
     Play(ActionArgs),
     /// Resolve and download one episode.
     Download(ActionArgs),
+    /// List remembered search queries (newest first).
+    History(HistoryArgs),
     /// Check for or install the latest ani-cli-rs release.
     Update {
         /// Only report whether an update is available.
@@ -138,6 +140,16 @@ struct SearchArgs {
     /// Print structured JSON instead of tab-separated text.
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Args, Debug)]
+struct HistoryArgs {
+    /// Print structured JSON instead of one query per line.
+    #[arg(long)]
+    json: bool,
+    /// Clear remembered search queries (watch history is untouched; use -D for that).
+    #[arg(long)]
+    clear: bool,
 }
 
 #[derive(Args, Debug)]
@@ -234,8 +246,12 @@ async fn run(cli: Cli) -> Result<()> {
     let demo_mode = cli.demo_mode();
     let mut language = cli.language.unwrap_or_default();
     let mut clients = ProviderClients::new(demo_mode, language)?;
+    // Search-query log lives next to the watch log and honors ANI_CLI_HIST_DIR
+    // the same way; recording stays best-effort so a read-only state dir
+    // never fails a search.
+    let search_history = SearchHistory::platform_default()?;
     if let Some(command) = cli.command {
-        return run_command(demo_mode, &clients, cli.provider, command).await;
+        return run_command(demo_mode, &clients, &search_history, cli.provider, command).await;
     }
     let history = HistoryStore::platform_default()?;
     if cli.delete {
@@ -285,6 +301,10 @@ async fn run(cli: Cli) -> Result<()> {
             'search: loop {
                 let query = if let Some(query) = initial_query.take() {
                     query
+                } else if let Some(recalled) =
+                    select_recent_search(&search_history, terminal, cli.select_nth).await?
+                {
+                    recalled
                 } else {
                     Input::with_theme(&ColorfulTheme::default())
                         .with_prompt("Search anime")
@@ -293,6 +313,13 @@ async fn run(cli: Cli) -> Result<()> {
                 };
                 let fanout = should_fanout_spanish(cli.provider, language);
                 let provider = effective_search_provider(cli.provider, language);
+                // Same best-effort recall as the scriptable `search` path.
+                let _ = search_history
+                    .record(
+                        &query,
+                        &search_context_label(cli.provider, language, fanout),
+                    )
+                    .await;
                 eprintln!(
                     "Searching providers... ({} + language: {})",
                     if fanout {
@@ -737,6 +764,7 @@ fn showcase_streams(provider: CatalogProvider, episode: &str) -> Vec<StreamLink>
 async fn run_command(
     demo_mode: bool,
     clients: &ProviderClients,
+    search_history: &SearchHistory,
     selected_provider: Option<CatalogProvider>,
     command: Commands,
 ) -> Result<()> {
@@ -756,6 +784,15 @@ async fn run_command(
                     .search_with_options(provider, &args.query, mode, options)
                     .await
             };
+            // Remember the query once it actually ran (even when it comes back
+            // empty or falls back to English); best-effort so logging never
+            // fails the search itself.
+            let _ = search_history
+                .record(
+                    &args.query,
+                    &search_context_label(selected_provider, language, fanout),
+                )
+                .await;
             let failed_spanish = language == LanguagePreference::Spanish
                 && (fanout || provider.spanish_capable())
                 && is_fallback_trigger(&attempt);
@@ -782,6 +819,17 @@ async fn run_command(
             output(&values, args.json, |value| {
                 format!("{}\t{} ({} episodes)", value.id, value.name, value.episodes)
             })?;
+        }
+        Commands::History(args) => {
+            if args.clear {
+                search_history.clear().await?;
+                println!("Search history cleared.");
+            } else {
+                let entries = search_history.entries().await?;
+                output(&entries, args.json, |value| {
+                    format!("{}\t{}", value.query, value.context)
+                })?;
+            }
         }
         Commands::Episodes(args) => {
             let provider = selected_provider.unwrap_or_default();
@@ -898,6 +946,37 @@ async fn offer_english_fallback(query: &str, json: bool) -> Result<bool> {
     Ok(index == 0)
 }
 
+/// Short scope label stored next to each remembered query (e.g.
+/// `es via jkanime+tioanime`, `es via jkanime`, `anikoto2`). Pure so the
+/// matrix is unit-testable.
+fn search_context_label(
+    provider: Option<CatalogProvider>,
+    language: LanguagePreference,
+    fanout: bool,
+) -> String {
+    if language == LanguagePreference::Spanish {
+        if fanout {
+            "es via jkanime+tioanime".into()
+        } else {
+            format!("es via {}", provider.unwrap_or_default())
+        }
+    } else {
+        provider.unwrap_or_default().to_string()
+    }
+}
+
+/// Display rows for the recents picker: `New search` first, then
+/// `query (context)` newest-first. Pure so formatting is unit-testable.
+fn recent_search_items(entries: &[SearchEntry]) -> Vec<String> {
+    let mut items = vec!["✎ New search".to_owned()];
+    items.extend(
+        entries
+            .iter()
+            .map(|entry| format!("{} ({})", entry.query, entry.context)),
+    );
+    items
+}
+
 fn output<T: Serialize>(values: &[T], json: bool, text: impl Fn(&T) -> String) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(values)?);
@@ -907,6 +986,38 @@ fn output<T: Serialize>(values: &[T], json: bool, text: impl Fn(&T) -> String) -
         }
     }
     Ok(())
+}
+
+/// Recents picker shown before the typing prompt in interactive runs.
+/// Returns the recalled query, or `None` to fall through to typing (also on
+/// Esc, so backing out never traps the user in a picker loop). Stays out of
+/// scripted flows (`--select-nth`, pipes) which keep the historic behavior.
+async fn select_recent_search(
+    search_history: &SearchHistory,
+    terminal: bool,
+    select_nth: Option<usize>,
+) -> Result<Option<String>> {
+    if !terminal || select_nth.is_some() {
+        return Ok(None);
+    }
+    let entries = search_history.entries().await?;
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    let items = recent_search_items(&entries);
+    let Some(index) = FuzzySelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Search anime (Enter: type, Esc: type, type to filter)")
+        .items(&items)
+        .default(0)
+        .interact_opt()
+        .map_err(dialog_error)?
+    else {
+        return Ok(None);
+    };
+    if index == 0 {
+        return Ok(None);
+    }
+    Ok(entries.get(index - 1).map(|entry| entry.query.clone()))
 }
 
 fn select_search_result(
@@ -1549,6 +1660,51 @@ mod tests {
 
         assert_eq!(cli.language, Some(LanguagePreference::Spanish));
         assert_eq!(cli.query, ["black", "torch"]);
+    }
+
+    #[test]
+    fn search_context_labels_cover_fanout_and_single_catalogs() {
+        assert_eq!(
+            search_context_label(None, LanguagePreference::Spanish, true),
+            "es via jkanime+tioanime"
+        );
+        assert_eq!(
+            search_context_label(
+                Some(CatalogProvider::JkAnime),
+                LanguagePreference::Spanish,
+                false
+            ),
+            "es via jkanime"
+        );
+        assert_eq!(
+            search_context_label(None, LanguagePreference::Default, false),
+            CatalogProvider::default().to_string()
+        );
+    }
+
+    #[test]
+    fn recent_search_items_lead_with_new_search() {
+        assert_eq!(recent_search_items(&[]), vec!["✎ New search".to_string()]);
+        let entries = vec![
+            SearchEntry {
+                query: "frieren".into(),
+                context: "anikoto2".into(),
+                timestamp: 2,
+            },
+            SearchEntry {
+                query: "black torch".into(),
+                context: "es via jkanime+tioanime".into(),
+                timestamp: 1,
+            },
+        ];
+        assert_eq!(
+            recent_search_items(&entries),
+            vec![
+                "✎ New search".to_string(),
+                "frieren (anikoto2)".to_string(),
+                "black torch (es via jkanime+tioanime)".to_string(),
+            ]
+        );
     }
 
     #[test]

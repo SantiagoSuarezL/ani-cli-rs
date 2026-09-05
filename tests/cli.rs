@@ -179,8 +179,12 @@ fn prefixed_ids_auto_route_to_anikoto() {
 
 #[test]
 fn showcase_search_is_fixture_backed_and_hidden_from_help() {
+    // Search runs log to the state dir: isolate so the suite never touches
+    // the developer's real search history.
+    let isolated = tempfile::tempdir().unwrap();
     Command::cargo_bin("ani-cli-rs")
         .unwrap()
+        .env("ANI_CLI_HIST_DIR", isolated.path())
         .args(["--demo-mode", "--provider", "anikoto", "search", "starfall"])
         .assert()
         .success()
@@ -233,8 +237,10 @@ fn showcase_exposes_deterministic_episodes_and_quality_metadata() {
 
 #[test]
 fn showcase_adult_filter_is_explicit() {
+    let isolated = tempfile::tempdir().unwrap();
     Command::cargo_bin("ani-cli-rs")
         .unwrap()
+        .env("ANI_CLI_HIST_DIR", isolated.path())
         .args(["--demo-mode", "search", "velvet"])
         .assert()
         .success()
@@ -242,8 +248,80 @@ fn showcase_adult_filter_is_explicit() {
 
     Command::cargo_bin("ani-cli-rs")
         .unwrap()
+        .env("ANI_CLI_HIST_DIR", isolated.path())
         .args(["--demo-mode", "search", "velvet", "--allow-adult"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Velvet Nebula"));
+}
+
+#[test]
+fn history_lists_scriptable_searches_newest_first() {
+    let isolated = tempfile::tempdir().unwrap();
+    for query in ["starfall", "velvet"] {
+        Command::cargo_bin("ani-cli-rs")
+            .unwrap()
+            .env("ANI_CLI_HIST_DIR", isolated.path())
+            .args(["--demo-mode", "search", query, "--allow-adult"])
+            .assert()
+            .success();
+    }
+    // Text mode: one `query\tcontext` line per search, newest first.
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .env("ANI_CLI_HIST_DIR", isolated.path())
+        .arg("history")
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("velvet\tanikoto"))
+        .stdout(predicate::str::contains("starfall\tanikoto"));
+    // JSON mode carries query, context and timestamp.
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .env("ANI_CLI_HIST_DIR", isolated.path())
+        .args(["history", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"query\": \"velvet\""))
+        .stdout(predicate::str::contains("\"timestamp\""));
+}
+
+#[test]
+fn history_clear_empties_searches_but_not_watch_history() {
+    let isolated = tempfile::tempdir().unwrap();
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .env("ANI_CLI_HIST_DIR", isolated.path())
+        .args(["--demo-mode", "search", "starfall"])
+        .assert()
+        .success();
+    // `-D` keeps deleting only the Bash-compatible watch log.
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .env("ANI_CLI_HIST_DIR", isolated.path())
+        .arg("--delete")
+        .assert()
+        .success();
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .env("ANI_CLI_HIST_DIR", isolated.path())
+        .args(["history", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"query\": \"starfall\""));
+    // `history --clear` empties only the search log.
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .env("ANI_CLI_HIST_DIR", isolated.path())
+        .args(["history", "--clear"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Search history cleared"));
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .env("ANI_CLI_HIST_DIR", isolated.path())
+        .args(["history", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"query\"").not());
 }
