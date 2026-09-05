@@ -5,7 +5,8 @@ use ani_lib::{
     HistoryStore, I18n, JkAnimeClient, LanguagePreference, Player, PlayerKind, PlayerOptions,
     Result, SearchOptions, SearchResult, StreamLink, TioAnimeClient, TranslationType,
     choose_quality, download_stream, effective_search_provider, expand_episode_selection,
-    is_fallback_trigger, provider_from_show_id, require_language,
+    is_fallback_trigger, merge_spanish_search, provider_from_show_id, require_language,
+    should_fanout_spanish,
 };
 #[cfg(debug_assertions)]
 use ani_lib::{RequestHeaders, SubtitleTrack};
@@ -34,7 +35,7 @@ struct Cli {
     /// Catalog provider: anikoto2 (default), anikoto, jkanime or tioanime (experimental Spanish catalogs).
     #[arg(short = 'p', long, global = true, env = "ANI_CLI_RS_PROVIDER")]
     provider: Option<CatalogProvider>,
-    /// Request Spanish-language content (experimental: only --language es with --provider jkanime for now).
+    /// Request Spanish-language content (experimental: --language es searches JKAnime + TioAnime unless --provider narrows it).
     #[arg(long, global = true, env = "ANI_CLI_LANGUAGE")]
     language: Option<LanguagePreference>,
     /// Continue from the next unwatched episode in the ani-cli history.
@@ -290,19 +291,29 @@ async fn run(cli: Cli) -> Result<()> {
                         .interact_text()
                         .map_err(dialog_error)?
                 };
+                let fanout = should_fanout_spanish(cli.provider, language);
                 let provider = effective_search_provider(cli.provider, language);
-                let attempt = clients
-                    .search_with_options(
-                        provider,
-                        &query,
-                        mode,
-                        SearchOptions {
-                            allow_adult: cli.allow_adult,
-                        },
-                    )
-                    .await;
+                eprintln!(
+                    "Searching providers... ({} + language: {})",
+                    if fanout {
+                        "JKAnime + TioAnime".to_string()
+                    } else {
+                        provider.to_string()
+                    },
+                    language
+                );
+                let search_options = SearchOptions {
+                    allow_adult: cli.allow_adult,
+                };
+                let attempt = if fanout {
+                    clients.search_spanish(&query, mode, search_options).await
+                } else {
+                    clients
+                        .search_with_options(provider, &query, mode, search_options)
+                        .await
+                };
                 let failed_spanish = language == LanguagePreference::Spanish
-                    && provider.spanish_capable()
+                    && (fanout || provider.spanish_capable())
                     && is_fallback_trigger(&attempt);
                 let results = match attempt {
                     Ok(results) if !results.is_empty() => results,
@@ -337,7 +348,11 @@ async fn run(cli: Cli) -> Result<()> {
                     else {
                         continue 'search;
                     };
+                    println!("✓ {}", show.name);
+                    println!();
                     let episodes = clients.episodes(&show.id, show.provider, mode).await?;
+                    println!("Season: ({} episodes available)", episodes.len());
+                    println!();
                     'episode: loop {
                         let selection = if let Some(selection) = cli.episode.clone() {
                             selection
@@ -352,6 +367,7 @@ async fn run(cli: Cli) -> Result<()> {
                             };
                             selection
                         };
+                        println!("Opening best available stream...");
                         let selected = expand_episode_selection(&selection, &episodes)?;
                         let prepared = if cli.download {
                             match preflight_downloads(
@@ -570,6 +586,23 @@ impl ProviderClients {
         }
     }
 
+    /// Fan-out Spanish search over every Spanish-capable catalog in
+    /// reliability order (ARCH §6 #5 + §10). Provider-side failures are
+    /// isolated via [`merge_spanish_search`]; an explicit `--provider` must
+    /// keep using [`Self::search_with_options`] instead.
+    async fn search_spanish(
+        &self,
+        query: &str,
+        mode: TranslationType,
+        options: SearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        let (jk, tio) = tokio::join!(
+            self.search_with_options(CatalogProvider::JkAnime, query, mode, options),
+            self.search_with_options(CatalogProvider::TioAnime, query, mode, options),
+        );
+        merge_spanish_search(jk, tio)
+    }
+
     async fn episodes(
         &self,
         show_id: &str,
@@ -710,23 +743,27 @@ async fn run_command(
     let language = clients.language();
     match command {
         Commands::Search(args) => {
+            let fanout = should_fanout_spanish(selected_provider, language);
             let provider = effective_search_provider(selected_provider, language);
             let mode = TranslationType::from_str(&args.mode)?;
             let options = SearchOptions {
                 allow_adult: args.allow_adult,
             };
-            let attempt = clients
-                .search_with_options(provider, &args.query, mode, options)
-                .await;
+            let attempt = if fanout {
+                clients.search_spanish(&args.query, mode, options).await
+            } else {
+                clients
+                    .search_with_options(provider, &args.query, mode, options)
+                    .await
+            };
             let failed_spanish = language == LanguagePreference::Spanish
-                && provider.spanish_capable()
+                && (fanout || provider.spanish_capable())
                 && is_fallback_trigger(&attempt);
             let values = match attempt {
                 Ok(values) if !values.is_empty() => values,
                 _ if failed_spanish => {
                     if offer_english_fallback(&args.query, args.json).await? {
-                        let english =
-                            ProviderClients::new(demo_mode, LanguagePreference::Default)?;
+                        let english = ProviderClients::new(demo_mode, LanguagePreference::Default)?;
                         english
                             .search_with_options(
                                 CatalogProvider::default(),
@@ -879,12 +916,24 @@ fn select_search_result(
     } else if results.len() == 1 {
         return Ok(Some(results[0].clone()));
     } else {
+        // Merged `--language es` searches span JKAnime + TioAnime: tag the
+        // provider so the user choice (TECH §6) is informed. Single-catalog
+        // lists keep the historic untagged label.
+        let show_provider = results
+            .iter()
+            .skip(1)
+            .any(|value| value.provider != results[0].provider);
         let mut items = vec!["← Back to search".to_owned()];
-        items.extend(
-            results
-                .iter()
-                .map(|value| format!("{} ({} episodes)", value.name, value.episodes)),
-        );
+        items.extend(results.iter().map(|value| {
+            if show_provider {
+                format!(
+                    "{} ({} episodes) [{}]",
+                    value.name, value.episodes, value.provider
+                )
+            } else {
+                format!("{} ({} episodes)", value.name, value.episodes)
+            }
+        }));
         let Some(index) = FuzzySelect::with_theme(&ColorfulTheme::default())
             .with_prompt(purpose.anime_prompt())
             .items(&items)
