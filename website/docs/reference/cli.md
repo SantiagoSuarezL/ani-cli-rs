@@ -72,6 +72,7 @@ ani-cli-rs --language es --provider tioanime search --json "black torch"
 - **Fallback:** if no Spanish results exist, interactive mode prompts `No Spanish version is currently available. Continue in English? Yes/No`; non-interactive mode (`--json` or piped stdin) returns a deterministic error instructing to rerun without `--language es`.
 - **Variants:** `--language es-419` / `es-ES` are not yet supported and return a planned-support error; only generic `es` is available (no provider currently distinguishes regional variants).
 - **Env:** `ANI_CLI_LANGUAGE=es` is equivalent to `--language es`.
+- **iPhone:** paste a resolved JKAnime HLS URL (`links --json ... -q best`) into mobile Safari on the same WiFi; see [Playback and Players](../guides/playback-and-players.md#iphone-network-players-no-install).
 
 ## Show IDs
 

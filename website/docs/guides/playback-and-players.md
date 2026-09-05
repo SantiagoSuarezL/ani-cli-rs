@@ -59,6 +59,23 @@ This keeps protected playlists, segments, and provider headers available to the 
 
 Android intent APIs do not accept the same mpv/VLC command-line options as desktop executables. For relayed HLS, ani-cli-rs wraps provider WebVTT/SRT tracks in timed subtitle media playlists and publishes them as standard HLS renditions. Select the track from the Android player's subtitle menu if it is not enabled automatically. Device testing confirmed relayed playback and selectable external subtitles with mpv-android, VLC, Amnis, and Samsung Video Player. Compatibility can still vary between Android versions and player builds. Embedded and burned-in subtitles remain unchanged.
 
+## iPhone / network players (no install)
+
+There is no iOS player adapter: ani-cli-rs cannot be installed on an iPhone and cannot launch its apps. The workaround is resolving the stream URL on the PC and opening it in the phone's browser or player over the same WiFi. No download and no fork changes are needed for headerless streams.
+
+JKAnime streams carry no extra header requirements, so the resolved HLS URL plays directly in mobile Safari (native HLS, verified live with `--language es`):
+
+```console
+ani-cli-rs --language es --provider jkanime search --json "black torch"
+ani-cli-rs --language es --provider jkanime links --json "jkanime:black-torch" 2 -q best
+```
+
+Copy the `url` field (an `.m3u8` URL) to the iPhone — messenger saved messages, mail, or a shared note all work — and open it in Safari. Resolve right before watching: the signed query parameters expire, so a morning URL may be dead by the evening; re-run `links` when playback refuses to start.
+
+TioAnime MP4s require the embed page as `Referer` (the media host answers HTTP 500 without it), so pasting them into Safari or VLC for iOS fails. For those episodes use [Downloads](downloads.md) on the PC and play the file from the phone instead.
+
+Limits of this path: history and `--continue` stay on the PC (each phone episode is opened by hand), and Spanish subtitles are burned into the video, so there is nothing to configure on the phone.
+
 ## Syncplay
 
 ```console

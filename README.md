@@ -198,6 +198,8 @@ For protected HLS playback, leave Termux running in the background. Return to it
 
 Interactive playback remains open after an episode and offers next, replay, previous, episode-selection, and quality controls. Add `--exit-after-play` to exit immediately instead.
 
+Watching on iPhone (same WiFi, no install): resolve a JKAnime HLS URL with `links --json` and open it in mobile Safari — see [Playback and Players](https://vorlie.github.io/ani-cli-rs/guides/playback-and-players/#iphone-network-players-no-install).
+
 In download mode, search results act as the anime/season picker. All selected episodes are resolved before the first transfer begins, preventing unavailable episodes from leaving a partially downloaded batch.
 
 ## CLI compatibility
