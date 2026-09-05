@@ -805,8 +805,8 @@ async fn run_command(
                 )
                 .await?;
             if let Some(quality) = args.quality {
-                let value = choose_quality(&values, &quality)
-                    .ok_or_else(|| AniError::UnavailableNoStreams)?;
+                let value =
+                    choose_quality(&values, &quality).ok_or(AniError::UnavailableNoStreams)?;
                 output(std::slice::from_ref(value), args.json, |value| {
                     format!("{}\t{}\t{}", value.resolution, value.provider, value.url)
                 })?;
@@ -822,8 +822,8 @@ async fn run_command(
             let streams = clients
                 .streams(&args.show_id, provider, &args.episode, mode)
                 .await?;
-            let stream = choose_quality(&streams, &args.quality)
-                .ok_or_else(|| AniError::UnavailableNoStreams)?;
+            let stream =
+                choose_quality(&streams, &args.quality).ok_or(AniError::UnavailableNoStreams)?;
             let mut options = PlayerOptions::default_player();
             if let Some(executable) = args.player {
                 options.executable = executable;
@@ -844,8 +844,8 @@ async fn run_command(
                     TranslationType::from_str(&args.mode)?,
                 )
                 .await?;
-            let stream = choose_quality(&streams, &args.quality)
-                .ok_or_else(|| AniError::UnavailableNoStreams)?;
+            let stream =
+                choose_quality(&streams, &args.quality).ok_or(AniError::UnavailableNoStreams)?;
             let options = DownloadOptions {
                 directory: args.output.unwrap_or_else(|| PathBuf::from(".")),
                 filename: format!("{} Episode {}", args.title, args.episode),
@@ -865,8 +865,17 @@ async fn run_command(
 /// switches language: returns true only when the user explicitly accepts
 /// continuing in the default catalog. Non-interactive flows (pipes,
 /// `--json`) get a deterministic error instead of a prompt.
+/// Pure decision behind `offer_english_fallback` (TECH §7): prompt only in
+/// interactive flows. Split out so the matrix is unit-testable without a
+/// controlling terminal — test harnesses inherit whatever stdin the
+/// developer's shell has (running `cargo test` from an interactive shell
+/// hands the tests a real TTY, which must never open a prompt).
+fn should_prompt_english_fallback(json: bool, terminal: bool) -> bool {
+    !json && terminal
+}
+
 async fn offer_english_fallback(query: &str, json: bool) -> Result<bool> {
-    if json || !std::io::stdin().is_terminal() {
+    if !should_prompt_english_fallback(json, std::io::stdin().is_terminal()) {
         return Err(AniError::Unavailable(format!(
             "No Spanish version is currently available for \"{query}\"; rerun without --language es for the default catalog"
         )));
@@ -912,7 +921,7 @@ fn select_search_result(
         index
             .checked_sub(1)
             .filter(|index| *index < results.len())
-            .ok_or_else(|| AniError::InputSelectionOutOfRange)?
+            .ok_or(AniError::InputSelectionOutOfRange)?
     } else if results.len() == 1 {
         return Ok(Some(results[0].clone()));
     } else {
@@ -1097,7 +1106,7 @@ async fn continue_selection(
         index
             .checked_sub(1)
             .filter(|index| *index < candidates.len())
-            .ok_or_else(|| AniError::InputSelectionOutOfRange)?
+            .ok_or(AniError::InputSelectionOutOfRange)?
     } else {
         let mut items = vec!["← Cancel".to_owned()];
         items.extend(
@@ -1201,8 +1210,8 @@ async fn preflight_downloads(
             let streams = clients
                 .streams(&show.id, show.provider, episode, mode)
                 .await?;
-            let stream = choose_download_stream(&streams, quality)
-                .ok_or_else(|| AniError::UnavailableNoStreams)?;
+            let stream =
+                choose_download_stream(&streams, quality).ok_or(AniError::UnavailableNoStreams)?;
             Ok(PreparedEpisode {
                 episode: episode.clone(),
                 stream,
@@ -1293,7 +1302,7 @@ async fn prepare_episode(
         .await?;
     let stream = choose_quality(&streams, quality)
         .cloned()
-        .ok_or_else(|| AniError::UnavailableNoStreams)?;
+        .ok_or(AniError::UnavailableNoStreams)?;
     Ok(PreparedEpisode {
         episode: episode.into(),
         stream,
@@ -1500,12 +1509,12 @@ fn adjacent_episode(episodes: &[String], current: &str, delta: isize) -> Result<
     let index = episodes
         .iter()
         .position(|value| value == current)
-        .ok_or_else(|| AniError::InputInvalidEpisode)? as isize
+        .ok_or(AniError::InputInvalidEpisode)? as isize
         + delta;
     episodes
         .get(index as usize)
         .cloned()
-        .ok_or_else(|| AniError::UnavailableNoEpisodes)
+        .ok_or(AniError::UnavailableNoEpisodes)
 }
 
 fn clean_title(value: &str) -> String {
@@ -1542,11 +1551,20 @@ mod tests {
         assert_eq!(cli.query, ["black", "torch"]);
     }
 
+    #[test]
+    fn english_fallback_prompts_only_when_interactive() {
+        assert!(should_prompt_english_fallback(false, true));
+        assert!(!should_prompt_english_fallback(true, true));
+        assert!(!should_prompt_english_fallback(false, false));
+        assert!(!should_prompt_english_fallback(true, false));
+    }
+
     #[tokio::test]
     async fn english_fallback_is_deterministic_without_terminal() {
-        // Test harnesses have no controlling terminal, so the prompt path
-        // must resolve to the explicit non-interactive error (never hang).
-        let error = offer_english_fallback("black torch", false)
+        // Hermetic by construction: the `--json` path never touches stdin,
+        // whatever TTY the developer's shell hands the test harness (a bare
+        // `cargo test` from an interactive shell must never open a prompt).
+        let error = offer_english_fallback("black torch", true)
             .await
             .unwrap_err();
         assert!(

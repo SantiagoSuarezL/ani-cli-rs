@@ -1,5 +1,10 @@
 # ani-cli-rs 0.10.1
 
+## Unreleased (post-0.10.1 polish, 2026-09-05)
+- `cargo clippy --all-targets -- -D warnings` passes on toolchain 1.96 (`ok_or_else(|| …)` → `ok_or(…)` for 14 unit-variant sites; no behavior change).
+- TioAnime per-episode fallback: removed `YourUpload` files (`novideo.mp4`) now list sibling Mega/Voe servers with browser URLs in the resolution error (`is_novideo_error` + `browser_fallback_suffix`, 2 new unit tests). Mega/Voe stay browser-only: Voe hides behind `eugenemakedraw.com` + obfuscated player, Mega needs its file-key API — both verified live 2026-09-05 and intentionally not reverse-engineered.
+- Suite 118 OK (80 lib + 21 bin + 17 CLI); test de fallback inglés hermético al TTY (`should_prompt_english_fallback`); release binary + Scoop/cargo shims rebuilt at 0.10.1.
+
 ## Spanish language experimental support (`--language es`)
 
 ### Provider selection and fallback (Phase 5)

@@ -23,9 +23,11 @@
 //! so this provider satisfies generic `--language es` only, with hardcoded
 //! subtitles (`StreamLink.subtitles` stays empty).
 //!
-//! Only the YourUpload embeds are resolved. Mega/Voe/YourUpload-siblings
-//! (StreamSB, Okru, Netu, …) and the download table are intentionally left
-//! unresolved until live evidence requires them.
+//! Only the YourUpload embeds resolve to direct media. Mega/Voe/siblings
+//! (StreamSB, Okru, Netu, …) need embed-host crypto or JS-unpacking that
+//! breaks often (Voe hides behind `eugenemakedraw.com` + obfuscated player;
+//! Mega needs its file-key API), so they are surfaced as browser-fallback
+//! URLs in the resolution error instead of silent "not implemented" text.
 
 use std::{
     collections::HashMap,
@@ -244,26 +246,40 @@ impl TioAnimeClient {
         }
         let mut streams = Vec::new();
         let mut failures = Vec::new();
+        // Servers without a direct resolver (Mega, Voe, …) are kept as
+        // browser fallbacks so a removed YourUpload file still leaves the
+        // user with something actionable instead of a dead end.
+        let mut browser_fallbacks: Vec<(String, String)> = Vec::new();
+        let mut yourupload_removed = false;
         for server in servers {
-            // PoC scope: only YourUpload resolves to direct media today.
+            // Resolution scope: only YourUpload resolves to direct media
+            // today (see module docs for why Mega/Voe stay browser-only).
             if !server.label.eq_ignore_ascii_case("yourupload") {
+                browser_fallbacks.push((server.label.clone(), server.embed.clone()));
                 failures.push(format!("{}: resolver not implemented in PoC", server.label));
                 continue;
             }
             match self.resolve_yourupload(&server, &episode_url).await {
                 Ok(stream) => streams.push(stream),
-                Err(error) => failures.push(format!("{}: {error}", server.label)),
+                Err(error) => {
+                    yourupload_removed |= is_novideo_error(&error);
+                    failures.push(format!("{}: {error}", server.label));
+                }
             }
         }
         let mut seen = std::collections::HashSet::new();
         streams.retain(|stream| seen.insert(stream.url.clone()));
         sort_streams(&mut streams);
         if streams.is_empty() {
-            let detail = if failures.is_empty() {
-                "no video servers resolved".into()
+            let mut detail = if failures.is_empty() {
+                "no video servers resolved".to_string()
             } else {
                 failures.join("; ")
             };
+            detail.push_str(&browser_fallback_suffix(
+                yourupload_removed,
+                &browser_fallbacks,
+            ));
             eprintln!("TioAnime source resolution failed: {detail}");
             return Err(AniError::UnavailableNoEpisodes);
         }
@@ -475,6 +491,38 @@ fn parse_yourupload_media(html: &str) -> Option<String> {
         .expect("static regex")
         .captures(html)
         .map(|captures| captures[1].to_string())
+}
+
+/// True when `error` is the removed-file signal from [`TioAnimeClient::resolve_yourupload`]
+/// (deleted/expired YourUpload files serve `/embed/novideo.mp4`). Lets
+/// [`TioAnimeClient::streams`] tell a removed file apart from a generic
+/// resolution failure so the fallback hint can point at sibling servers or
+/// another episode instead of suggesting a bare retry.
+fn is_novideo_error(error: &AniError) -> bool {
+    matches!(error, AniError::Provider(message) if message.contains("novideo"))
+}
+
+/// Appends an actionable suffix to the `streams` resolution error listing
+/// sibling servers as browser fallbacks. Pure (no I/O) so it is unit-testable.
+fn browser_fallback_suffix(
+    yourupload_removed: bool,
+    browser_fallbacks: &[(String, String)],
+) -> String {
+    if browser_fallbacks.is_empty() {
+        return String::new();
+    }
+    let alternates = browser_fallbacks
+        .iter()
+        .map(|(label, embed)| format!("{label} {embed}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if yourupload_removed {
+        format!(
+            "; YourUpload file was removed upstream — try another episode (e.g., 2) or provider JKAnime, or open in a browser: {alternates}"
+        )
+    } else {
+        format!("; not directly playable — open in a browser: {alternates}")
+    }
 }
 
 fn normalize_episode(value: &str) -> Result<String> {
@@ -689,6 +737,41 @@ mod tests {
     fn unsafe_media_urls_are_rejected() {
         assert!(validate_remote_url("http://media.example.invalid/x.mp4").is_err());
         assert!(validate_remote_url("https://192.0.2.1/x.mp4").is_err());
+    }
+
+    #[test]
+    fn novideo_errors_are_detected_for_browser_fallback() {
+        let removed = AniError::Provider(
+            "YourUpload video removed or unavailable (novideo.mp4) — try another episode (e.g., 2) or provider JKAnime".into(),
+        );
+        assert!(is_novideo_error(&removed));
+        assert!(!is_novideo_error(&AniError::Provider(
+            "YourUpload page exposed no direct media URL".into()
+        )));
+        assert!(!is_novideo_error(&AniError::UnavailableNoEpisodes));
+    }
+
+    #[test]
+    fn browser_fallback_suffix_points_at_sibling_servers() {
+        let siblings = vec![
+            (
+                "Mega".to_string(),
+                "https://mega.nz/embed/!abc!def".to_string(),
+            ),
+            (
+                "Voe".to_string(),
+                "https://voe.sx/e/zinf7arp3m40".to_string(),
+            ),
+        ];
+        let removed = browser_fallback_suffix(true, &siblings);
+        assert!(removed.contains("removed upstream"));
+        assert!(removed.contains("https://mega.nz/embed/!abc!def"));
+        assert!(removed.contains("https://voe.sx/e/zinf7arp3m40"));
+        let generic = browser_fallback_suffix(false, &siblings);
+        assert!(generic.contains("open in a browser"));
+        assert!(generic.contains("https://voe.sx/e/zinf7arp3m40"));
+        assert!(browser_fallback_suffix(true, &[]).is_empty());
+        assert!(browser_fallback_suffix(false, &[]).is_empty());
     }
 
     #[tokio::test]

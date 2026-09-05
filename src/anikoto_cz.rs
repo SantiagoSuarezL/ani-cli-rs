@@ -203,7 +203,7 @@ impl AnikotoCzClient {
             .episodes
             .iter()
             .find(|value| value.number == episode_number)
-            .ok_or_else(|| AniError::UnavailableNoEpisodes)?;
+            .ok_or(AniError::UnavailableNoEpisodes)?;
         let available = match mode {
             TranslationType::Sub => selected.sub,
             TranslationType::Dub => selected.dub,
