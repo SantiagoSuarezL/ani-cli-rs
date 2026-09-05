@@ -106,6 +106,7 @@ For an application integration example, see the [Rust library integration guide]
 - Quality selection, episode ranges, history, and continuation
 - Preflighted batch downloads with aria2, yt-dlp, FFmpeg, and built-in fallbacks
 - Scriptable commands with JSON output
+- Spanish language experimental support (`--language es`) with JKAnime + TioAnime fan-out, provider ranking, and explicit English fallback
 - Native Rust HTTP, HTML parsing, and local HLS relay—no Python, curl, sed, OpenSSL, Botan, or fzf dependency
 
 ## Installation
@@ -181,6 +182,7 @@ ani-cli-rs --continue
 ani-cli-rs --download "anime title"
 ani-cli-rs --allow-adult "search query"
 ani-cli-rs --provider anikoto2 "black torch"
+ani-cli-rs --language es "black torch"
 ```
 
 Termux examples:
