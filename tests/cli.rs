@@ -46,13 +46,26 @@ fn help_documents_provider_selection() {
 }
 
 #[test]
+fn help_documents_spanish_fanout() {
+    Command::cargo_bin("ani-cli-rs")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--language"))
+        .stdout(predicate::str::contains("JKAnime + TioAnime"));
+}
+
+#[test]
 fn removed_allanime_provider_is_rejected() {
     Command::cargo_bin("ani-cli-rs")
         .unwrap()
         .args(["--provider", "allanime", "search", "example"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("invalid value 'allanime' for '--provider <PROVIDER>'"));
+        .stderr(predicate::str::contains(
+            "invalid value 'allanime' for '--provider <PROVIDER>'",
+        ));
 }
 
 #[test]
@@ -69,7 +82,12 @@ fn invalid_jkanime_ids_fail_before_network() {
 fn invalid_tioanime_ids_fail_before_network() {
     Command::cargo_bin("ani-cli-rs")
         .unwrap()
-        .args(["--provider", "tioanime", "episodes", "tioanime:not-base64!!!"])
+        .args([
+            "--provider",
+            "tioanime",
+            "episodes",
+            "tioanime:not-base64!!!",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("Invalid input"));
