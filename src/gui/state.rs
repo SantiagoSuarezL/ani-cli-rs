@@ -2,8 +2,8 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 use crate::{
-    AnikotoClient, AnikotoCzClient, CatalogProvider, HlsRelay, JkAnimeClient, Player, PlayerOptions,
-    SearchResult, StreamLink, TioAnimeClient, TranslationType,
+    AnikotoClient, AnikotoCzClient, CatalogProvider, HlsRelay, JkAnimeClient, LanguagePreference,
+    Player, PlayerOptions, SearchResult, StreamLink, TioAnimeClient, TranslationType,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,6 +35,7 @@ pub struct GuiState {
     pub selected_stream: Option<StreamLink>,
     pub translation: TranslationType,
     pub provider: CatalogProvider,
+    pub language: LanguagePreference,
     pub loading_state: LoadingState,
     pub error_message: Option<String>,
 
@@ -60,6 +61,10 @@ impl GuiState {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let runtime = Runtime::new().expect("Failed to create Tokio runtime");
+        let language = std::env::var("ANI_CLI_LANGUAGE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_default();
 
         Self {
             search_query: String::new(),
@@ -71,6 +76,7 @@ impl GuiState {
             selected_stream: None,
             translation: TranslationType::Sub,
             provider: CatalogProvider::Anikoto,
+            language,
             loading_state: LoadingState::Idle,
             error_message: None,
             message_tx: tx,

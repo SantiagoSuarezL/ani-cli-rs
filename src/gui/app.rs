@@ -3,7 +3,7 @@ use eframe::egui;
 use egui_material_icons::icons::*;
 
 use crate::{
-    AniError, CatalogProvider, StreamLink,
+    AniError, CatalogProvider, LanguagePreference, StreamLink,
     gui::state::{GuiMessage, GuiState, LoadingState},
     relay_stream_without_hls_subtitles, requires_hls_relay,
 };
@@ -78,38 +78,94 @@ impl AniGuiApp {
         let tioanime_client = self.state.tioanime_client.clone();
         let provider = self.state.provider;
         let translation = self.state.translation;
+        let language = self.state.language;
 
         self.state.runtime.spawn(async move {
-            let result = match provider {
-                CatalogProvider::Anikoto => {
-                    if let Some(client) = anikoto_client {
-                        client.search(&query, translation).await
-                    } else {
-                        Err(AniError::Provider("Anikoto client not available".into()))
+            let fanout =
+                language == LanguagePreference::Spanish && provider == CatalogProvider::Anikoto;
+            let result = if fanout {
+                let (jk, tio) = tokio::join!(
+                    async {
+                        if let Some(client) = jkanime_client {
+                            client.search(&query, translation).await
+                        } else {
+                            Err(AniError::Provider("JKAnime client not available".into()))
+                        }
+                    },
+                    async {
+                        if let Some(client) = tioanime_client {
+                            client.search(&query, translation).await
+                        } else {
+                            Err(AniError::Provider("TioAnime client not available".into()))
+                        }
+                    },
+                );
+                let mut merged = Vec::new();
+                let mut trigger_error: Option<AniError> = None;
+                for result in [jk, tio] {
+                    match result {
+                        Ok(values) => merged.extend(values),
+                        Err(error) => {
+                            let is_fallback = matches!(
+                                &error,
+                                AniError::Network(_)
+                                    | AniError::Provider(_)
+                                    | AniError::Catalog { .. }
+                                    | AniError::ProviderRateLimited { .. }
+                                    | AniError::Unavailable(_)
+                                    | AniError::UnavailableNoResults
+                                    | AniError::UnavailableNoEpisodes
+                                    | AniError::UnavailableNoStreams,
+                            );
+                            if is_fallback {
+                                trigger_error = Some(error);
+                            } else {
+                                let _ =
+                                    tx.send(GuiMessage::Error(format!("Search failed: {}", error)));
+                                return;
+                            }
+                        }
                     }
                 }
-
-                CatalogProvider::Anikoto2 => {
-                    if let Some(client) = anikoto_cz_client {
-                        client.search(&query, translation).await
-                    } else {
-                        Err(AniError::Provider("Anikoto.cz client not available".into()))
-                    }
+                if !merged.is_empty() {
+                    Ok(merged)
+                } else if let Some(error) = trigger_error {
+                    Err(error)
+                } else {
+                    Ok(Vec::new())
                 }
-
-                CatalogProvider::JkAnime => {
-                    if let Some(client) = jkanime_client {
-                        client.search(&query, translation).await
-                    } else {
-                        Err(AniError::Provider("JKAnime client not available".into()))
+            } else {
+                match provider {
+                    CatalogProvider::Anikoto => {
+                        if let Some(client) = anikoto_client {
+                            client.search(&query, translation).await
+                        } else {
+                            Err(AniError::Provider("Anikoto client not available".into()))
+                        }
                     }
-                }
 
-                CatalogProvider::TioAnime => {
-                    if let Some(client) = tioanime_client {
-                        client.search(&query, translation).await
-                    } else {
-                        Err(AniError::Provider("TioAnime client not available".into()))
+                    CatalogProvider::Anikoto2 => {
+                        if let Some(client) = anikoto_cz_client {
+                            client.search(&query, translation).await
+                        } else {
+                            Err(AniError::Provider("Anikoto.cz client not available".into()))
+                        }
+                    }
+
+                    CatalogProvider::JkAnime => {
+                        if let Some(client) = jkanime_client {
+                            client.search(&query, translation).await
+                        } else {
+                            Err(AniError::Provider("JKAnime client not available".into()))
+                        }
+                    }
+
+                    CatalogProvider::TioAnime => {
+                        if let Some(client) = tioanime_client {
+                            client.search(&query, translation).await
+                        } else {
+                            Err(AniError::Provider("TioAnime client not available".into()))
+                        }
                     }
                 }
             };
@@ -471,6 +527,33 @@ impl AniGuiApp {
                             &mut self.state.translation,
                             crate::TranslationType::Dub,
                             "Dub",
+                        );
+                    });
+            });
+
+            ui.add_space(10.0);
+
+            ui.label(egui::RichText::new(ICON_GLOBE).size(17.0).weak());
+
+            ui.label(egui::RichText::new("Language").small().weak());
+
+            ui.add_enabled_ui(controls_enabled, |ui| {
+                egui::ComboBox::from_id_salt("language_selector")
+                    .selected_text(match self.state.language {
+                        LanguagePreference::Default => "Default",
+                        LanguagePreference::Spanish => "Español (es)",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.state.language,
+                            LanguagePreference::Default,
+                            "Default",
+                        );
+
+                        ui.selectable_value(
+                            &mut self.state.language,
+                            LanguagePreference::Spanish,
+                            "Español (es)",
                         );
                     });
             });
