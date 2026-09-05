@@ -58,6 +58,11 @@ const CACHE_LIMIT: usize = 100;
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PLAYLIST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EPISODE_PAGES: usize = 25;
+/// Delay before the single retry of a failed catalog fetch (live 2026-09-05:
+/// episode/embed pages intermittently answer HTTP 404 under burst load — a
+/// fan-out search plus enrichment fires 12+ requests in seconds — then
+/// succeed on immediate retry; see Regla 12.1).
+const FETCH_RETRY_DELAY: Duration = Duration::from_millis(800);
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -449,6 +454,20 @@ impl JkAnimeClient {
     }
 
     async fn get_text(&self, url: &str, referer: &str, ajax: bool) -> Result<String> {
+        match self.get_text_once(url, referer, ajax).await {
+            // One retry on catalog HTTP failures (transient WAF 404s under
+            // burst load). Parse, network and rate-limit errors keep their
+            // first outcome, so a genuinely missing page still fails —
+            // roughly one retry delay later, never in a loop.
+            Err(AniError::Catalog { .. }) => {
+                tokio::time::sleep(FETCH_RETRY_DELAY).await;
+                self.get_text_once(url, referer, ajax).await
+            }
+            outcome => outcome,
+        }
+    }
+
+    async fn get_text_once(&self, url: &str, referer: &str, ajax: bool) -> Result<String> {
         let mut request = self
             .inner
             .http
@@ -467,6 +486,18 @@ impl JkAnimeClient {
     }
 
     async fn post_text(&self, url: &str, token: &str) -> Result<String> {
+        match self.post_text_once(url, token).await {
+            // Same single-retry policy as `get_text`: the episode-list AJAX
+            // endpoint flaps the same way under burst load.
+            Err(AniError::Catalog { .. }) => {
+                tokio::time::sleep(FETCH_RETRY_DELAY).await;
+                self.post_text_once(url, token).await
+            }
+            outcome => outcome,
+        }
+    }
+
+    async fn post_text_once(&self, url: &str, token: &str) -> Result<String> {
         let request = self
             .inner
             .http
@@ -541,21 +572,23 @@ fn decode_id(value: &str) -> Result<JkAnimeId> {
         if payload.is_empty() {
             return Err(AniError::Input("invalid JKAnime show ID".into()));
         }
-        // Historical shorthand: a bare slug after the prefix.
-        if !payload.contains(['=', '+', '/']) && validate_slug(payload).is_ok() {
-            return Ok(JkAnimeId {
-                slug: payload.into(),
-                anime_id: None,
-                title: None,
-            });
+        // Structured metadata first: unpadded base64 IDs (no `=`/`+`/`/`,
+        // e.g. One Punch Man 3 — live 2026-09-05) also pass the slug shape
+        // below, so guessing slug first misroutes them to a 404. A bare slug
+        // can never survive the base64+JSON round-trip into this struct.
+        if let Ok(bytes) = STANDARD.decode(payload)
+            && let Ok(decoded) = serde_json::from_slice::<JkAnimeId>(&bytes)
+            && validate_slug(&decoded.slug).is_ok()
+        {
+            return Ok(decoded);
         }
-        let bytes = STANDARD
-            .decode(payload)
-            .map_err(|_| AniError::Input("invalid JKAnime show ID encoding".into()))?;
-        let decoded: JkAnimeId = serde_json::from_slice(&bytes)
-            .map_err(|_| AniError::Input("invalid JKAnime show metadata".into()))?;
-        validate_slug(&decoded.slug)?;
-        return Ok(decoded);
+        // Historical shorthand: a bare slug after the prefix.
+        validate_slug(payload)?;
+        return Ok(JkAnimeId {
+            slug: payload.into(),
+            anime_id: None,
+            title: None,
+        });
     }
     validate_slug(value)?;
     Ok(JkAnimeId {
@@ -824,6 +857,10 @@ fn cache_put<T>(cache: &Mutex<HashMap<String, Cached<T>>>, key: String, value: T
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
 
     #[test]
     fn ids_round_trip_and_raw_slugs_are_supported() {
@@ -848,6 +885,27 @@ mod tests {
         assert!(decode_id("jkanime:").is_err());
         assert!(decode_id("jkanime:not-base64!!!").is_err());
         assert!(decode_id("not a slug!").is_err());
+    }
+
+    #[test]
+    fn unpadded_ids_decode_to_metadata_not_slugs() {
+        // Live 2026-09-05 (One Punch Man 3): base64 without `=`/`+`/`/`
+        // also matches the slug shape, and the old slug-first guess routed
+        // it to `/{base64}/2/` → HTTP 404.
+        let id = JkAnimeId {
+            slug: "one-punch-man-3".into(),
+            anime_id: Some("4353".into()),
+            title: Some("One Punch Man 3".into()),
+        };
+        let encoded = encode_id(&id).unwrap();
+        assert!(
+            !encoded
+                .strip_prefix("jkanime:")
+                .unwrap()
+                .contains(['=', '+', '/']),
+            "test needs an unpadded ID to cover the regression"
+        );
+        assert_eq!(decode_id(&encoded).unwrap(), id);
     }
 
     #[test]
@@ -943,6 +1001,60 @@ mod tests {
         assert!(validate_remote_url("http://media.example.invalid/x.m3u8").is_err());
         assert!(validate_remote_url("https://192.0.2.1/x.m3u8").is_err());
         assert!(parse_embedded_media("<html>no player here</html>").is_none());
+    }
+
+    #[tokio::test]
+    async fn transient_catalog_404_is_retried_once() {
+        // Live 2026-09-05: episode/embed pages flap HTTP 404 under burst
+        // load, then succeed. The 404 mount is consumed after one match
+        // (`up_to_n_times(1)` — `expect` alone only verifies, it does not
+        // stop matching), so the retry observably hits the 200 below; the
+        // received count assertion fails loudly if that ever changes.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/flaky"))
+            .respond_with(ResponseTemplate::new(404))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/flaky"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("recovered"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = JkAnimeClient::builder()
+            .base_url(server.uri())
+            .build()
+            .unwrap();
+        let body = client
+            .get_text(&format!("{}/flaky", server.uri()), &server.uri(), false)
+            .await
+            .unwrap();
+        assert_eq!(body, "recovered");
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn persistent_catalog_404_still_fails_after_one_retry() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/gone"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let client = JkAnimeClient::builder()
+            .base_url(server.uri())
+            .build()
+            .unwrap();
+        let error = client
+            .get_text(&format!("{}/gone", server.uri()), &server.uri(), false)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AniError::Catalog { .. }));
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
     #[tokio::test]

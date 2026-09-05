@@ -361,20 +361,22 @@ fn decode_id(value: &str) -> Result<TioAnimeId> {
         if payload.is_empty() {
             return Err(AniError::Input("invalid TioAnime show ID".into()));
         }
-        // Historical shorthand: a bare slug after the prefix.
-        if !payload.contains(['=', '+', '/']) && validate_slug(payload).is_ok() {
-            return Ok(TioAnimeId {
-                slug: payload.into(),
-                title: None,
-            });
+        // Structured metadata first: unpadded base64 IDs also pass the slug
+        // shape, and guessing slug first misroutes them to a 404 (same class
+        // of bug as JKAnime One Punch Man 3 — live 2026-09-05). A bare slug
+        // can never survive the base64+JSON round-trip into this struct.
+        if let Ok(bytes) = STANDARD.decode(payload)
+            && let Ok(decoded) = serde_json::from_slice::<TioAnimeId>(&bytes)
+            && validate_slug(&decoded.slug).is_ok()
+        {
+            return Ok(decoded);
         }
-        let bytes = STANDARD
-            .decode(payload)
-            .map_err(|_| AniError::Input("invalid TioAnime show ID encoding".into()))?;
-        let decoded: TioAnimeId = serde_json::from_slice(&bytes)
-            .map_err(|_| AniError::Input("invalid TioAnime show metadata".into()))?;
-        validate_slug(&decoded.slug)?;
-        return Ok(decoded);
+        // Historical shorthand: a bare slug after the prefix.
+        validate_slug(payload)?;
+        return Ok(TioAnimeId {
+            slug: payload.into(),
+            title: None,
+        });
     }
     validate_slug(value)?;
     Ok(TioAnimeId {
@@ -675,6 +677,23 @@ mod tests {
         assert!(decode_id("tioanime:").is_err());
         assert!(decode_id("tioanime:not-base64!!!").is_err());
         assert!(decode_id("not a slug!").is_err());
+    }
+
+    #[test]
+    fn unpadded_ids_decode_to_metadata_not_slugs() {
+        // Same class of bug as JKAnime One Punch Man 3 (live 2026-09-05):
+        // base64 without `=`/`+`/`/` must not be mistaken for a bare slug.
+        let id = TioAnimeId {
+            slug: "one-punch-man-3".into(),
+            title: Some("One Punch Man 3".into()),
+        };
+        let encoded = encode_id(&id).unwrap();
+        assert_eq!(decode_id(&encoded).unwrap(), id);
+        // And the shorthand still works for real slugs.
+        assert_eq!(
+            decode_id("tioanime:black-torch").unwrap().slug,
+            "black-torch"
+        );
     }
 
     #[test]
