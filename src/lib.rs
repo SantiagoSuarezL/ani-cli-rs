@@ -31,4 +31,4 @@ pub use models::{
     require_language, should_fanout_spanish,
 };
 pub use player::{Player, PlayerKind, PlayerOptions};
-pub use tioanime::{TioAnimeClient, TioAnimeClientBuilder};
+pub use tioanime::{TioAnimeClient, TioAnimeClientBuilder, is_browser_only_error};

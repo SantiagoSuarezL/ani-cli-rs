@@ -5,8 +5,8 @@ use ani_lib::{
     HistoryStore, I18n, JkAnimeClient, LanguagePreference, Player, PlayerKind, PlayerOptions,
     Result, SearchEntry, SearchHistory, SearchOptions, SearchResult, StreamLink, TioAnimeClient,
     TranslationType, choose_quality, download_stream, effective_search_provider,
-    expand_episode_selection, is_fallback_trigger, merge_spanish_search, provider_from_show_id,
-    require_language, should_fanout_spanish,
+    expand_episode_selection, is_browser_only_error, is_fallback_trigger, merge_spanish_search,
+    provider_from_show_id, require_language, should_fanout_spanish,
 };
 #[cfg(debug_assertions)]
 use ani_lib::{RequestHeaders, SubtitleTrack};
@@ -448,7 +448,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
         } else {
             for episode in &selected {
-                play_or_download(&context, episode, &cli.quality, false).await?;
+                play_or_download_with_skip(&context, episode, &cli.quality, false).await?;
             }
         }
 
@@ -1447,6 +1447,43 @@ async fn play_or_download(
     execute_prepared_episode(context, &prepared, download).await
 }
 
+/// Wrapper for `play_or_download` that auto-skips browser-only episodes (TioAnime
+/// Mega/Voe/Netu/YourUpload-novideo) by trying the next available episode.
+async fn play_or_download_with_skip(
+    context: &PlaybackContext<'_>,
+    episode: &str,
+    quality: &str,
+    download: bool,
+) -> Result<()> {
+    match play_or_download(context, episode, quality, download).await {
+        Err(error) if is_browser_only_error(&error) => {
+            if let Some(next_ep) = next_episode(context.episodes, episode) {
+                eprintln!(
+                    "\n⚠ Episode {episode} of \"{}\" is only available on browser-only servers \
+                    (Mega, Voe, Netu, etc.) — not playable directly in the CLI.\n\
+                    Auto-skipping to episode {next_ep}...\n",
+                    context.show.name
+                );
+                Box::pin(play_or_download_with_skip(
+                    context, &next_ep, quality, download,
+                ))
+                .await
+            } else {
+                Err(error)
+            }
+        }
+        other => other,
+    }
+}
+
+/// Returns the next episode after `current` in the available list, if any.
+fn next_episode(episodes: &[String], current: &str) -> Option<String> {
+    episodes
+        .iter()
+        .position(|ep| ep == current)
+        .and_then(|pos| episodes.get(pos + 1).cloned())
+}
+
 async fn execute_prepared_episode(
     context: &PlaybackContext<'_>,
     prepared: &PreparedEpisode,
@@ -1553,7 +1590,7 @@ async fn interactive_after_play(
             PlaybackAction::BackToSearch => break Ok(AfterPlayAction::Search),
             PlaybackAction::Quit => break Ok(AfterPlayAction::Done),
         }
-        play_or_download(context, &episode, &quality, false).await?;
+        play_or_download_with_skip(context, &episode, &quality, false).await?;
     }
 }
 

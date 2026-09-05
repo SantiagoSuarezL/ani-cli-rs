@@ -513,6 +513,10 @@ fn browser_fallback_suffix(
     if browser_fallbacks.is_empty() {
         return String::new();
     }
+    let labels: Vec<String> = browser_fallbacks
+        .iter()
+        .map(|(label, _)| label.clone())
+        .collect();
     let alternates = browser_fallbacks
         .iter()
         .map(|(label, embed)| format!("{label} {embed}"))
@@ -520,10 +524,25 @@ fn browser_fallback_suffix(
         .join("; ");
     if yourupload_removed {
         format!(
-            "; YourUpload file was removed upstream — try another episode (e.g., 2) or provider JKAnime, or open in a browser: {alternates}"
+            "; This episode on TioAnime only has browser-only servers ({}) — YourUpload was removed upstream (novideo.mp4). Try another episode (e.g., 2) or provider JKAnime, or open in a browser: {alternates}",
+            labels.join(", ")
         )
     } else {
-        format!("; not directly playable — open in a browser: {alternates}")
+        format!(
+            "; This episode on TioAnime only has browser-only servers ({}) — not directly playable in the CLI. Open in a browser: {alternates}",
+            labels.join(", ")
+        )
+    }
+}
+
+/// Checks if an error is a TioAnime "browser-only" episode error (no playable
+/// servers, only browser fallbacks like Mega/Voe/Netu/YourUpload-novideo).
+/// Used by the interactive loop to offer auto-skip to the next episode.
+pub fn is_browser_only_error(error: &AniError) -> bool {
+    match error {
+        AniError::UnavailableNoEpisodes => true,
+        AniError::Provider(msg) => msg.contains("browser-only servers"),
+        _ => false,
     }
 }
 
@@ -783,11 +802,15 @@ mod tests {
             ),
         ];
         let removed = browser_fallback_suffix(true, &siblings);
-        assert!(removed.contains("removed upstream"));
+        assert!(removed.contains("browser-only servers"));
+        assert!(removed.contains("Mega, Voe"));
+        assert!(removed.contains("YourUpload was removed upstream"));
         assert!(removed.contains("https://mega.nz/embed/!abc!def"));
         assert!(removed.contains("https://voe.sx/e/zinf7arp3m40"));
         let generic = browser_fallback_suffix(false, &siblings);
-        assert!(generic.contains("open in a browser"));
+        assert!(generic.contains("browser-only servers"));
+        assert!(generic.contains("Mega, Voe"));
+        assert!(generic.contains("Open in a browser"));
         assert!(generic.contains("https://voe.sx/e/zinf7arp3m40"));
         assert!(browser_fallback_suffix(true, &[]).is_empty());
         assert!(browser_fallback_suffix(false, &[]).is_empty());
