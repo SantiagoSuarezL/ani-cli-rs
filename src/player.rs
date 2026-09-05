@@ -562,8 +562,14 @@ fn mpv_options(stream: &StreamLink, title: &str, referer: &str) -> Vec<String> {
     if let Some(track) = stream.subtitles.iter().find(|track| track.default) {
         args.push(format!("--slang={}", track.label));
     }
-    // Add cache settings for HLS relay streams
-    if stream.hls && crate::anikoto::requires_hls_relay(stream) {
+    // HLS streams are segmented — tiny default mpv cache stalls on slow
+    // provider edges even on fast links (live 2026-09-05: JKAnime HLS
+    // paused every few seconds on 850 Mbps cable while TioAnime MP4 was
+    // instant, because this guard only matched Anikoto/KotoCDN relay
+    // hosts). Apply generous cache to every HLS stream, not just the
+    // Anikoto relay case; direct JKAnime HLS and relayed local URLs
+    // (127.0.0.1) both benefit.
+    if stream.hls {
         args.push("--cache=yes".into());
         args.push("--cache-secs=120".into());
         args.push("--demuxer-max-bytes=512MiB".into());
@@ -671,8 +677,50 @@ mod tests {
                 "--http-header-fields=Origin: https://origin.example",
                 "--sub-file=https://media/subtitles.vtt",
                 "--slang=English",
+                "--cache=yes",
+                "--cache-secs=120",
+                "--demuxer-max-bytes=512MiB",
+                "--demuxer-max-back-bytes=256MiB",
             ]
         );
+    }
+
+    #[test]
+    fn hls_streams_get_generous_cache_even_without_anikoto_host() {
+        // Regression for Fase 13: JKAnime HLS (non-MegaPlay host, also
+        // 127.0.0.1 relay URLs) stalled because cache was only added for
+        // Anikoto/KotoCDN. Every HLS stream now gets the cache tuning.
+        let player = Player::new(PlayerOptions {
+            executable: "mpv".into(),
+            kind: PlayerKind::Mpv,
+            no_detach: true,
+            exit_after_play: false,
+        });
+        let hls = StreamLink {
+            url: "https://cdn.jkanime.net/hls/episode.m3u8".into(),
+            resolution: "1080p".into(),
+            hls: true,
+            provider: "JKAnime Desu".into(),
+            downloadable: false,
+            headers: RequestHeaders::default(),
+            subtitles: vec![],
+        };
+        let args = player.command_args(&hls, "Title");
+        assert!(args.contains(&"--cache=yes".into()));
+        assert!(args.contains(&"--cache-secs=120".into()));
+        assert!(args.contains(&"--demuxer-max-bytes=512MiB".into()));
+
+        let mp4 = StreamLink {
+            url: "https://vidcache.net/video.mp4".into(),
+            resolution: "Auto".into(),
+            hls: false,
+            provider: "TioAnime YourUpload".into(),
+            downloadable: true,
+            headers: RequestHeaders::default(),
+            subtitles: vec![],
+        };
+        let args = player.command_args(&mp4, "Title");
+        assert!(!args.contains(&"--cache=yes".into()));
     }
 
     #[test]
