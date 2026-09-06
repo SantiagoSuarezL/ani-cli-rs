@@ -372,12 +372,17 @@ impl JkAnimeClient {
         let parsed = validate_remote_url(media.trim())?;
         let hls = parsed.path().to_ascii_lowercase().contains(".m3u8")
             || parsed.query().is_some_and(|query| query.contains(".m3u8"));
-        // Live evidence 2026-09-04: the media host plays with no extra
-        // headers (bare mpv plays 1080p fine), while sending the JKPlayer
-        // Referer/Origin/UA stalls playback. Per the "only headers proven
-        // necessary" rule, send none here. The episode-page Referer stays on
-        // the JKPlayer page fetch above, where it belongs.
-        let headers = RequestHeaders::default();
+        let headers = if hls {
+            // JKAnime HLS streams (e.g., ducvomes.com CDN) require the episode
+            // page Referer to authorize segment requests. Without it, segment
+            // fetches fail with "Invalid argument" causing constant rebuffering.
+            RequestHeaders {
+                referer: Some(episode_url.to_string()),
+                ..Default::default()
+            }
+        } else {
+            RequestHeaders::default()
+        };
         if hls {
             return self
                 .expand_hls(parsed.as_str(), &embed.label, &headers)

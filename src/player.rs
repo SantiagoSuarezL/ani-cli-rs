@@ -571,9 +571,11 @@ fn mpv_options(stream: &StreamLink, title: &str, referer: &str) -> Vec<String> {
     // (127.0.0.1) both benefit.
     if stream.hls {
         args.push("--cache=yes".into());
-        args.push("--cache-secs=120".into());
-        args.push("--demuxer-max-bytes=512MiB".into());
-        args.push("--demuxer-max-back-bytes=256MiB".into());
+        args.push("--cache-secs=300".into());
+        args.push("--demuxer-max-bytes=2GiB".into());
+        args.push("--demuxer-max-back-bytes=1GiB".into());
+        args.push("--hls-bitrate=max".into());
+        args.push("--demuxer-lavf-o=protocol_whitelist=[file,http,https,tcp,tls,crypto]".into());
     }
     args
 }
@@ -678,9 +680,11 @@ mod tests {
                 "--sub-file=https://media/subtitles.vtt",
                 "--slang=English",
                 "--cache=yes",
-                "--cache-secs=120",
-                "--demuxer-max-bytes=512MiB",
-                "--demuxer-max-back-bytes=256MiB",
+                "--cache-secs=300",
+                "--demuxer-max-bytes=2GiB",
+                "--demuxer-max-back-bytes=1GiB",
+                "--hls-bitrate=max",
+                "--demuxer-lavf-o=protocol_whitelist=[file,http,https,tcp,tls,crypto]",
             ]
         );
     }
@@ -707,8 +711,8 @@ mod tests {
         };
         let args = player.command_args(&hls, "Title");
         assert!(args.contains(&"--cache=yes".into()));
-        assert!(args.contains(&"--cache-secs=120".into()));
-        assert!(args.contains(&"--demuxer-max-bytes=512MiB".into()));
+        assert!(args.contains(&"--cache-secs=300".into()));
+        assert!(args.contains(&"--demuxer-max-bytes=2GiB".into()));
 
         let mp4 = StreamLink {
             url: "https://vidcache.net/video.mp4".into(),

@@ -738,7 +738,13 @@ pub fn requires_hls_relay(stream: &StreamLink) -> bool {
         && Url::parse(&stream.url)
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned))
-            .is_some_and(|host| is_megaplay_media_host(&host))
+            .is_some_and(|host| is_megaplay_media_host(&host) || is_jkanime_media_host(&host))
+}
+
+fn is_jkanime_media_host(host: &str) -> bool {
+    ["nika.playmudos.com", "ducvomes.com"]
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
 }
 
 fn stream_link(url: String, resolution: String, hls: bool, headers: RequestHeaders) -> StreamLink {

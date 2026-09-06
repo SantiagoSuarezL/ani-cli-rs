@@ -122,6 +122,8 @@ async fn relay_stream_inner(
     let state = Arc::new(State {
         client: Client::builder()
             .redirect(reqwest::redirect::Policy::limited(8))
+            .pool_max_idle_per_host(16)
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
             .build()?,
         base: address,
         resources: Mutex::new(HashMap::new()),
